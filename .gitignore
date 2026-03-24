@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+
+# Runtime data
+data/speakers/
+data/sessions/
+data/dictionary.json
+
+# Node
+node_modules/
+
+# Tauri build output
+tauri-app/src-tauri/target/
+tauri-app/src-tauri/sidecar/
+tauri-app/dist/
+
+# PyInstaller
+*.spec
+transcriber-backend.spec
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Models cache
+*.bin
+*.pt
+*.onnx
+
+# Corrections data
+data/corrections.json
+
+# Logs
+*.log
+sidecar_*.txt
+sidecar_*.log
+
+# Test results
+tauri-app/test-results/
+test_audio*.html
+
+# Extra build targets
+tauri-app/src-tauri/target2/
+tauri-app/src-tauri/target_new/
+
+# Generated
+tauri-app/src-tauri/gen/

@@ -1,0 +1,46 @@
+[project]
+name = "transcriber"
+version = "0.1.0"
+description = "Real-time meeting transcription with speaker identification"
+requires-python = ">=3.10,<3.13"
+
+dependencies = [
+    # Web
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "websockets>=14.0",
+    # UI
+    "gradio>=5.0",
+    # Audio
+    "PyAudioWPatch>=0.2.13",
+    "numpy>=1.26",
+    "scipy>=1.14",
+    "soundfile>=0.12",
+    # ASR
+    "faster-whisper>=1.1",
+    # Speaker (WeSpeaker ResNet34-LM embedding + segmentation-3.0)
+    "pyannote-audio>=3.3",
+    # VAD
+    "silero-vad>=5.1",
+    # GPU monitoring
+    "pynvml>=12.0",
+    # LLM
+    "google-genai>=1.0",
+    # Config
+    "pydantic-settings>=2.0",
+    "python-dotenv>=1.0",
+    # Utilities
+    "python-multipart>=0.0.9",
+    "aiofiles>=24.0",
+    "httpx>=0.28",
+    # Device change detection (Windows COM)
+    "pycaw>=20230407",
+    "comtypes>=1.4",
+]
+
+[project.scripts]
+transcriber = "scripts.start:main"
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"

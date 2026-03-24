@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #06b6d4;
+  --color-primary-dark: #0891b2;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Markdown summary styles */
+.summary-markdown {
+  color: #cbd5e1;
+  line-height: 1.7;
+}
+
+.summary-markdown h2 {
+  color: #06b6d4;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid #334155;
+}
+
+.summary-markdown h2:first-child {
+  margin-top: 0;
+}
+
+.summary-markdown h3 {
+  color: #e2e8f0;
+  font-size: 1rem;
+  font-weight: 600;
+  margin-top: 1.25rem;
+  margin-bottom: 0.4rem;
+}
+
+.summary-markdown p {
+  color: #cbd5e1;
+  margin: 0.4rem 0;
+}
+
+.summary-markdown ul,
+.summary-markdown ol {
+  margin: 0.4rem 0;
+  padding-left: 1.5rem;
+}
+
+.summary-markdown li {
+  color: #cbd5e1;
+  margin: 0.25rem 0;
+}
+
+.summary-markdown li::marker {
+  color: #06b6d4;
+}
+
+/* Checkbox-style list items (action items) */
+.summary-markdown li > input[type="checkbox"] {
+  margin-right: 0.4rem;
+  accent-color: #06b6d4;
+}
+
+.summary-markdown strong {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.summary-markdown a {
+  color: #22d3ee;
+  text-decoration: underline;
+}
+
+.summary-markdown code {
+  color: #e2e8f0;
+  background: #1e293b;
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+}
