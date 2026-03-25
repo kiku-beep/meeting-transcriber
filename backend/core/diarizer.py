@@ -37,16 +37,32 @@ class Diarizer:
 
         from pyannote.audio import Model
 
+        # Monkey-patch torch.load to force weights_only=False during model loading.
+        # PyTorch 2.6 defaults weights_only=True, but pyannote checkpoints contain
+        # custom classes (TorchVersion, Specifications, Problem) that fail unpickling.
+        # Patching torch.load directly is necessary because multiple call sites
+        # (pyannote.audio.core.model, pytorch_lightning.core.saving) each import
+        # lightning_fabric's _load independently.
+        _orig_torch_load = torch.load
+
+        def _patched_torch_load(*args, **kwargs):
+            kwargs["weights_only"] = False
+            return _orig_torch_load(*args, **kwargs)
+
         # Disable cuDNN to avoid cudnnGetLibConfig crash on Windows
         # (cuDNN 9.1 symbol missing → 0xC0000409 stack buffer overrun)
         torch.backends.cudnn.enabled = False
 
         hf_token = settings.hf_token or None
         logger.info("Loading WeSpeaker ResNet34-LM model...")
-        self._model = Model.from_pretrained(
-            "pyannote/wespeaker-voxceleb-resnet34-LM",
-            token=hf_token,
-        )
+        try:
+            torch.load = _patched_torch_load
+            self._model = Model.from_pretrained(
+                "pyannote/wespeaker-voxceleb-resnet34-LM",
+                token=hf_token,
+            )
+        finally:
+            torch.load = _orig_torch_load
         self._model.to(self._device)
         self._model.eval()
         logger.info("WeSpeaker ResNet34-LM loaded on %s (cudnn disabled)", self._device)

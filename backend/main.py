@@ -2,6 +2,17 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+# Initialize CUDA context early and disable cuDNN to avoid cudnnGetLibConfig crash
+# on Windows (cuDNN 9.x symbol missing → STATUS_STACK_BUFFER_OVERRUN)
+import torch
+torch.backends.cudnn.enabled = False
+if torch.cuda.is_available():
+    try:
+        _cuda_init = torch.zeros(1, device="cuda")
+        del _cuda_init
+    except Exception:
+        pass
+
 # Patch huggingface_hub for SpeechBrain 1.0.3 / pyannote.audio compatibility.
 # Primary patch is in pyinstaller_entry.py (runs before all imports).
 # This fallback covers dev mode (running backend.main directly).
@@ -60,11 +71,10 @@ async def _preload_models():
         logger.info("Pre-loading models...")
 
         loop = asyncio.get_event_loop()
-        await asyncio.gather(
-            loop.run_in_executor(None, session._mic_buffer.load_model),
-            loop.run_in_executor(None, session._transcriber.load_model),
-            loop.run_in_executor(None, session._diarizer.load_model),
-        )
+        # Load sequentially to avoid CUDA initialization race conditions on Windows
+        await loop.run_in_executor(None, session._mic_buffer.load_model)
+        await loop.run_in_executor(None, session._transcriber.load_model)
+        await loop.run_in_executor(None, session._diarizer.load_model)
         logger.info("All models pre-loaded")
 
         # Auto-recompute invalid embeddings from stored audio samples
