@@ -49,6 +49,12 @@ export default function BackendLoader({ onReady }: Props) {
       <div className="mt-6 w-48 h-1 bg-slate-700 rounded-full overflow-hidden">
         <div className="h-full bg-cyan-500 rounded-full animate-pulse w-2/3" />
       </div>
+      <button
+        onClick={onReady}
+        className="mt-8 text-sm text-slate-500 hover:text-slate-300 underline"
+      >
+        スキップして設定画面へ
+      </button>
     </div>
   );
 }
