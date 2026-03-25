@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { WS_URL } from "./api";
+import { getWsUrl, getClientId, getAuthToken } from "./api";
 import type { TranscriptEntry, SessionInfo, WsMessage } from "./types";
 
 interface UseWebSocketOptions {
@@ -36,7 +36,12 @@ export function useWebSocket({ onEntry, onStatus, onClear, onRefresh, onUpdate, 
     let pingTimer: ReturnType<typeof setInterval>;
 
     function connect() {
-      const ws = new WebSocket(`${WS_URL}/ws/transcript`);
+      const wsUrl = getWsUrl();
+      const clientId = getClientId();
+      const token = getAuthToken();
+      const params = new URLSearchParams({ client_id: clientId });
+      if (token) params.set("token", token);
+      const ws = new WebSocket(`${wsUrl}/ws/transcript?${params}`);
       wsRef.current = ws;
 
       ws.onopen = () => {

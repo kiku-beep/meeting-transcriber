@@ -54,8 +54,9 @@ from backend.api.routes_playback import router as playback_router
 from backend.api.routes_screenshot import router as screenshot_router
 from backend.api.routes_call_detection import router as call_detection_router
 from backend.api.ws_transcription import router as ws_router
+from backend.api.ws_audio_ingest import router as audio_ingest_router
 from backend.config import settings
-from backend.models.session import get_session
+from backend.models.session import get_session, list_active_sessions
 from backend.services.call_detector import get_call_detector
 
 logging.basicConfig(
@@ -142,14 +143,19 @@ async def lifespan(app: FastAPI):
         lambda t: t.result() if not t.cancelled() and t.exception() is None else None
     )
 
-    # Start call auto-detection
-    if settings.call_detection_enabled:
+    # Start call auto-detection (standalone mode only — server has no local audio)
+    if settings.call_detection_enabled and settings.deployment_mode != "server":
         _start_call_detector()
+
+    if settings.deployment_mode == "server":
+        logger.info("Running in SERVER mode — local audio disabled, accepting remote clients")
+        logger.info("Max concurrent sessions: %d", settings.max_concurrent_sessions)
 
     yield
 
     # shutdown
-    get_call_detector().stop()
+    if settings.deployment_mode != "server":
+        get_call_detector().stop()
     session = get_session()
     await session.stop()
     session.terminate_pyaudio()
@@ -166,6 +172,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Bearer token auth middleware (server mode only)
+if settings.auth_token:
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+
+    class AuthMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            # Skip auth for health check and WebSocket (WS handles its own auth)
+            if request.url.path == "/api/health" or request.url.path.startswith("/ws/"):
+                return await call_next(request)
+            auth = request.headers.get("Authorization", "")
+            if auth != f"Bearer {settings.auth_token}":
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Unauthorized"},
+                )
+            return await call_next(request)
+
+    app.add_middleware(AuthMiddleware)
+
+
+# Server mode: add endpoint to list active sessions
+@app.get("/api/server/sessions")
+async def server_sessions():
+    return {"sessions": list_active_sessions()}
+
 app.include_router(health_router)
 app.include_router(audio_router)
 app.include_router(session_router)
@@ -178,6 +212,7 @@ app.include_router(playback_router)
 app.include_router(screenshot_router)
 app.include_router(call_detection_router)
 app.include_router(ws_router)
+app.include_router(audio_ingest_router)
 
 
 if __name__ == "__main__":

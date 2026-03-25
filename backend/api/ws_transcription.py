@@ -7,10 +7,11 @@ import json
 import math
 import logging
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from starlette.websockets import WebSocketState
 
-from backend.models.session import get_session
+from backend.models.session import get_session, get_or_create_session
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -39,12 +40,16 @@ def _sanitize_entry(entry) -> dict:
 
 
 @router.websocket("/ws/transcript")
-async def ws_transcript(ws: WebSocket):
+async def ws_transcript(ws: WebSocket, client_id: str = Query("default")):
     await ws.accept()
     _clients.add(ws)
-    logger.info("WebSocket client connected (%d total)", len(_clients))
+    logger.info("WebSocket client connected (%d total, client=%s)", len(_clients), client_id)
 
-    session = get_session()
+    # In server mode, use client-specific session; in standalone, use default
+    if settings.deployment_mode == "server" and client_id != "default":
+        session = get_or_create_session(client_id)
+    else:
+        session = get_session()
     last_index = 0
     last_status: dict | None = None
 

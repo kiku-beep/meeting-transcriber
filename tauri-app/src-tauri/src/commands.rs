@@ -1,5 +1,6 @@
 use tauri::{AppHandle, Manager, State};
 
+use crate::audio_sidecar::AudioSidecarManager;
 use crate::sidecar::SidecarManager;
 
 #[cfg(windows)]
@@ -145,4 +146,38 @@ pub fn set_recording_icon(app: AppHandle, recording: bool) {
 
     #[cfg(not(windows))]
     let _ = (app, recording);
+}
+
+// ── Audio sidecar commands (for remote server mode) ──────────────
+
+#[tauri::command]
+pub fn start_audio_sidecar(
+    audio_sidecar: State<'_, AudioSidecarManager>,
+    server_url: String,
+    client_id: String,
+    token: String,
+    session_name: String,
+    mic_index: Option<i32>,
+    loopback_index: Option<i32>,
+) -> Result<String, String> {
+    audio_sidecar.start(
+        &server_url,
+        &client_id,
+        &token,
+        &session_name,
+        mic_index,
+        loopback_index,
+    )?;
+    Ok("Started".into())
+}
+
+#[tauri::command]
+pub fn stop_audio_sidecar(audio_sidecar: State<'_, AudioSidecarManager>) -> String {
+    audio_sidecar.stop();
+    "Stopped".into()
+}
+
+#[tauri::command]
+pub fn get_audio_sidecar_status(audio_sidecar: State<'_, AudioSidecarManager>) -> bool {
+    audio_sidecar.is_running()
 }

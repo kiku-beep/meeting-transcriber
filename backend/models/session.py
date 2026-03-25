@@ -975,9 +975,39 @@ class TranscriptionSession:
             raise
 
 
-# Singleton session instance
-_session = TranscriptionSession()
+# ── Session Registry (multi-client support) ──────────────────────
+_sessions: dict[str, TranscriptionSession] = {}
+_default_session = TranscriptionSession()
+_sessions["default"] = _default_session
 
 
-def get_session() -> TranscriptionSession:
-    return _session
+def get_session(client_id: str = "default") -> TranscriptionSession:
+    """Get session by client_id. Returns default session for standalone mode."""
+    return _sessions.get(client_id, _default_session)
+
+
+def get_or_create_session(client_id: str) -> TranscriptionSession:
+    """Get or create a session for a client. Used in server mode."""
+    if client_id not in _sessions:
+        if len(_sessions) >= settings.max_concurrent_sessions + 1:  # +1 for default
+            raise RuntimeError(
+                f"Max concurrent sessions ({settings.max_concurrent_sessions}) reached"
+            )
+        _sessions[client_id] = TranscriptionSession()
+        logger.info("Created session for client %s (%d active)", client_id, len(_sessions))
+    return _sessions[client_id]
+
+
+def remove_session(client_id: str) -> None:
+    """Remove a client session from the registry."""
+    if client_id in _sessions and client_id != "default":
+        del _sessions[client_id]
+        logger.info("Removed session for client %s (%d remaining)", client_id, len(_sessions))
+
+
+def list_active_sessions() -> list[dict]:
+    """List all active sessions with their info."""
+    return [
+        {"client_id": cid, **s.info}
+        for cid, s in _sessions.items()
+    ]

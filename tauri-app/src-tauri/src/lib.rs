@@ -1,8 +1,10 @@
+mod audio_sidecar;
 mod commands;
 mod sidecar;
 
 use tauri::Manager;
 
+use crate::audio_sidecar::AudioSidecarManager;
 use crate::sidecar::SidecarManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -23,12 +25,16 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
         .manage(SidecarManager::new(8000))
+        .manage(AudioSidecarManager::new())
         .invoke_handler(tauri::generate_handler![
             commands::get_backend_url,
             commands::get_backend_status,
             commands::start_backend,
             commands::stop_backend,
             commands::set_recording_icon,
+            commands::start_audio_sidecar,
+            commands::stop_audio_sidecar,
+            commands::get_audio_sidecar_status,
         ])
         .setup(|app| {
             // Start sidecar (skipped in dev mode)

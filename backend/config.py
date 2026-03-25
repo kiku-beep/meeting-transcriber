@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     backend_host: str = "127.0.0.1"
     backend_port: int = 8000
 
+    # Deployment mode: "standalone" (local audio), "server" (remote audio via WebSocket)
+    deployment_mode: str = "standalone"
+    auth_token: str = ""  # Bearer token for server mode (empty = no auth)
+    max_concurrent_sessions: int = 5
+
     # Frontend
     frontend_port: int = 7860
 

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useWebSocket } from "../lib/useWebSocket";
 import { startSession, stopSession, pauseSession, discardSession, nameCluster, registerNewSpeaker, setExpectedSpeakers, editSessionEntry, bulkUpdateSpeaker, confirmSuggestion, getSessionEntries, deleteSessionEntry } from "../lib/apiSession";
 import { getSpeakers } from "../lib/apiSpeakers";
+import { isRemoteMode, startAudioSidecar, stopAudioSidecar } from "../lib/audioSidecar";
 import type { TranscriptEntry, SessionInfo, Speaker } from "../lib/types";
 import RecordingControls from "./transcription/RecordingControls";
 import CallNotificationBanner from "./transcription/CallNotificationBanner";
@@ -149,9 +150,14 @@ export default function Transcription({ onSessionStop }: Props) {
     setError("");
     setEntries([]);
     try {
-      await startSession({
-        session_name: overrideName || sessionName || undefined,
-      });
+      const name = overrideName || sessionName || undefined;
+      if (isRemoteMode()) {
+        // Remote mode: start audio sidecar (which sends "start" to server)
+        await startAudioSidecar({ sessionName: name });
+      } else {
+        // Standalone mode: tell backend to start with local audio
+        await startSession({ session_name: name });
+      }
       if (overrideName) setSessionName(overrideName);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -175,6 +181,10 @@ export default function Transcription({ onSessionStop }: Props) {
   const handleStop = async () => {
     setLoading(true);
     try {
+      if (isRemoteMode()) {
+        // Stop audio sidecar (which sends "stop" to server)
+        await stopAudioSidecar();
+      }
       const info = await stopSession();
       onSessionStop(info.session_id);
     } catch (e) {

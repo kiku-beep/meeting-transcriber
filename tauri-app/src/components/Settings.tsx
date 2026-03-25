@@ -3,6 +3,7 @@ import { getGpuStatus, getHealth, getAudioDevices } from "../lib/apiHealth";
 import { getModelStatus, switchModel, warmModelCache, getModelLoadingStatus } from "../lib/apiSession";
 import { getGeminiModels, setGeminiModel } from "../lib/apiSummary";
 import { getConfigStatus, setTextRefine } from "../lib/apiConfig";
+import { getBaseUrl, setServerUrl, setAuthToken, getAuthToken } from "../lib/api";
 import type { GpuStatus, AudioDevice, ModelStatus, GeminiModelInfo } from "../lib/types";
 import SettingsApiKey from "./settings/SettingsApiKey";
 import SettingsWhisperModel from "./settings/SettingsWhisperModel";
@@ -115,6 +116,18 @@ export default function Settings() {
     }
   };
 
+  const [serverUrlInput, setServerUrlInput] = useState(getBaseUrl());
+  const [authTokenInput, setAuthTokenInput] = useState(getAuthToken());
+  const [serverSaved, setServerSaved] = useState(false);
+
+  const handleSaveServerUrl = () => {
+    setServerUrl(serverUrlInput);
+    setAuthToken(authTokenInput);
+    setServerSaved(true);
+    setTimeout(() => setServerSaved(false), 2000);
+    refresh(); // Re-fetch health etc. from new server
+  };
+
   return (
     <div className="p-6 space-y-6 overflow-y-auto h-full">
       <h2 className="text-lg font-semibold">設定</h2>
@@ -125,6 +138,36 @@ export default function Settings() {
           <button onClick={() => setError("")} className="text-red-400 hover:text-red-300 ml-2 shrink-0">&#x2715;</button>
         </div>
       )}
+
+      {/* Server Connection */}
+      <section className="space-y-2">
+        <h3 className="text-sm font-medium text-slate-300">サーバー接続</h3>
+        <p className="text-xs text-slate-500">バックエンドサーバーのURLを指定（リモートサーバー使用時に変更）</p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={serverUrlInput}
+            onChange={(e) => setServerUrlInput(e.target.value)}
+            placeholder="http://192.168.1.100:8000"
+            className="flex-1 px-3 py-1.5 bg-slate-800 border border-slate-600 rounded text-sm focus:outline-none focus:border-blue-500"
+          />
+        </div>
+        <div className="flex gap-2 items-center">
+          <input
+            type="password"
+            value={authTokenInput}
+            onChange={(e) => setAuthTokenInput(e.target.value)}
+            placeholder="認証トークン（任意）"
+            className="flex-1 px-3 py-1.5 bg-slate-800 border border-slate-600 rounded text-sm focus:outline-none focus:border-blue-500"
+          />
+          <button
+            onClick={handleSaveServerUrl}
+            className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-sm font-medium shrink-0"
+          >
+            {serverSaved ? "保存済み" : "接続"}
+          </button>
+        </div>
+      </section>
 
       {/* Health */}
       <section className="space-y-2">
