@@ -1,7 +1,8 @@
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
-const BASE_URL = "http://127.0.0.1:8000";
-const WS_URL = "ws://127.0.0.1:8000";
+const BACKEND = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+const BASE_URL = BACKEND;
+const WS_URL = BACKEND.replace(/^http/, "ws");
 
 export { BASE_URL, WS_URL };
 
