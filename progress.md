@@ -25,3 +25,10 @@
 - Updated README to document VPN-only default and optional token auth.
 - Added `pytest.ini` so pytest only collects project tests under `tests/`, not PyInstaller sidecar internals.
 - Ran full project pytest with `python -m pytest -q`: 4 passed, 2 warnings.
+
+## 2026-05-04
+
+- Updated `scripts/start_server.ps1` to avoid a hard-coded Tailscale IP.
+- Added `-BindHost` and `-Port` parameters.
+- Added Tailscale IP auto-detection via `tailscale ip -4`, falling back to `0.0.0.0` with a warning.
+- Updated README server startup instructions for Chrome Remote Desktop/company PC setup.

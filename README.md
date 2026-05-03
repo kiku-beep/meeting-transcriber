@@ -129,12 +129,13 @@ scripts\start_server.ps1
 ```
 
 `start_server.ps1` は以下を自動設定します：
-- Tailscale IP (`100.116.182.31`) へのバインド
+- Tailscale IP へのバインド（`tailscale ip -4` で自動検出）
 - `KMP_DUPLICATE_LIB_OK=TRUE`（OpenMP重複ライブラリ回避）
 - サーバーモード（`DEPLOYMENT_MODE=server`）
 
 検証版はTailscale VPN内のみの利用を前提に、デフォルトではアプリ側の共有認証トークンを設定しません。
 追加でトークン認証を使う場合のみ `scripts\start_server.ps1 -AuthToken "任意のトークン"` で起動します。
+自動検出がうまくいかない場合は `scripts\start_server.ps1 -BindHost "<Tailscale IP>"` で明示指定します。
 
 > PC再起動後は `start_server.ps1` を再度実行する必要があります。
 
