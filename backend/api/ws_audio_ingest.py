@@ -23,7 +23,12 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from starlette.websockets import WebSocketState
 
 from backend.config import settings
-from backend.models.session import get_or_create_session, get_session, remove_session
+from backend.models.session import (
+    ensure_session_capacity,
+    get_or_create_session,
+    get_session,
+    remove_session,
+)
 from backend.models.schemas import SessionStatus
 
 logger = logging.getLogger(__name__)
@@ -89,6 +94,11 @@ async def ws_audio_ingest(ws: WebSocket, client_id: str, source: str = Query("mi
                     session_name = msg.get("session_name", "")
                     if session.status == SessionStatus.IDLE:
                         # Start session in server mode (no local audio)
+                        try:
+                            ensure_session_capacity(client_id)
+                        except RuntimeError as e:
+                            await ws.send_json({"type": "error", "detail": str(e)})
+                            continue
                         await _start_server_session(session, client_id, session_name)
                         await ws.send_json({"type": "started", "session_id": session.session_id})
 

@@ -987,15 +987,46 @@ def get_session(client_id: str = "default") -> TranscriptionSession:
 
 
 def get_or_create_session(client_id: str) -> TranscriptionSession:
-    """Get or create a session for a client. Used in server mode."""
+    """Get or create a session for a client. Used in server mode.
+
+    Creating a UI/client session must not consume a recording slot. Capacity is
+    enforced when a client starts recording.
+    """
     if client_id not in _sessions:
-        if len(_sessions) >= settings.max_concurrent_sessions + 1:  # +1 for default
-            raise RuntimeError(
-                f"Max concurrent sessions ({settings.max_concurrent_sessions}) reached"
-            )
         _sessions[client_id] = TranscriptionSession()
         logger.info("Created session for client %s (%d active)", client_id, len(_sessions))
     return _sessions[client_id]
+
+
+def active_session_count() -> int:
+    """Count sessions that are actively using recording/transcription capacity."""
+    active_statuses = {
+        SessionStatus.STARTING,
+        SessionStatus.RUNNING,
+        SessionStatus.PAUSED,
+        SessionStatus.STOPPING,
+    }
+    return sum(
+        1
+        for cid, session in _sessions.items()
+        if cid != "default" and session.status in active_statuses
+    )
+
+
+def ensure_session_capacity(client_id: str) -> None:
+    """Raise if a new recording would exceed the configured active-session cap."""
+    session = get_or_create_session(client_id)
+    if session.status in {
+        SessionStatus.STARTING,
+        SessionStatus.RUNNING,
+        SessionStatus.PAUSED,
+        SessionStatus.STOPPING,
+    }:
+        return
+    if active_session_count() >= settings.max_concurrent_sessions:
+        raise RuntimeError(
+            f"Max concurrent sessions ({settings.max_concurrent_sessions}) reached"
+        )
 
 
 def remove_session(client_id: str) -> None:

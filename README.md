@@ -133,6 +133,9 @@ scripts\start_server.ps1
 - `KMP_DUPLICATE_LIB_OK=TRUE`（OpenMP重複ライブラリ回避）
 - サーバーモード（`DEPLOYMENT_MODE=server`）
 
+検証版はTailscale VPN内のみの利用を前提に、デフォルトではアプリ側の共有認証トークンを設定しません。
+追加でトークン認証を使う場合のみ `scripts\start_server.ps1 -AuthToken "任意のトークン"` で起動します。
+
 > PC再起動後は `start_server.ps1` を再度実行する必要があります。
 
 #### クライアント側（フロントエンドのみ）
