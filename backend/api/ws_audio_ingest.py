@@ -23,6 +23,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from starlette.websockets import WebSocketState
 
 from backend.config import settings
+from backend.core.segmentation_refiner import should_run_segmentation_refinement
 from backend.models.session import (
     ensure_session_capacity,
     get_or_create_session,
@@ -146,7 +147,7 @@ async def _start_server_session(
             loop.run_in_executor(None, session._transcriber.load_model),
             loop.run_in_executor(None, session._diarizer.load_model),
         ]
-        if settings.segmentation_refine_enabled and not session._refiner.is_loaded:
+        if should_run_segmentation_refinement() and not session._refiner.is_loaded:
             loads.append(loop.run_in_executor(None, session._refiner.load_model))
         await asyncio.gather(*loads)
     else:
@@ -170,7 +171,7 @@ async def _start_server_session(
     session._pipeline_task = asyncio.create_task(session._pipeline.run())
 
     # Start segmentation refinement
-    if settings.segmentation_refine_enabled and session._refiner.is_loaded:
+    if should_run_segmentation_refinement() and session._refiner.is_loaded:
         session._refiner_task = asyncio.create_task(
             session._refiner.run(
                 session._stop_event,
@@ -182,7 +183,7 @@ async def _start_server_session(
             )
         )
 
-    # Start text refinement
+    # Arm text refinement for a final pass when the session stops.
     session._text_refiner.start(session.entries)
 
     session.status = SessionStatus.RUNNING

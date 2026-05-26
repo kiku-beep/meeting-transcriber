@@ -290,12 +290,17 @@ class TranscriptionPipeline:
 
         # Normalize: strip whitespace and trailing punctuation
         cleaned = text.strip().rstrip("。、.!?！？")
+        strict_standalone_phrases = {
+            phrase.strip().rstrip("。、.!?！？")
+            for phrase in settings.hallucination_strict_standalone_phrases
+        }
 
         # Check if any hallucination phrase appears in the text
         matched_phrase = None
         for phrase in phrases:
-            if phrase in cleaned:
-                matched_phrase = phrase
+            normalized_phrase = phrase.strip().rstrip("。、.!?！？")
+            if normalized_phrase and normalized_phrase in cleaned:
+                matched_phrase = normalized_phrase
                 break
 
         if matched_phrase is None:
@@ -304,6 +309,10 @@ class TranscriptionPipeline:
         # Phrase is embedded in longer text — allow it (genuine speech)
         if cleaned != matched_phrase:
             return False
+
+        if matched_phrase in strict_standalone_phrases:
+            logger.info("Strict standalone hallucination phrase filtered: text='%s'", cleaned)
+            return True
 
         # Standalone phrase — filter unless ALL rescue conditions are met
         if (

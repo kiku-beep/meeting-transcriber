@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from copy import deepcopy
 from pathlib import Path
 
 from backend.config import settings
@@ -42,16 +43,24 @@ class DictionaryStore:
             try:
                 self._data = json.loads(self.path.read_text(encoding="utf-8"))
                 self._mtime = self.path.stat().st_mtime
+                if self._merge_missing_defaults():
+                    self._save()
                 logger.info("Dictionary loaded: %d replacements, %d fillers",
                             len(self._data.get("replacements", [])),
                             len(self._data.get("fillers", [])))
                 return
             except Exception:
                 logger.exception("Failed to load dictionary, using defaults")
-        self._data = DEFAULT_DICTIONARY.copy()
-        self._data["fillers"] = list(DEFAULT_DICTIONARY["fillers"])
-        self._data["replacements"] = list(DEFAULT_DICTIONARY["replacements"])
+        self._data = deepcopy(DEFAULT_DICTIONARY)
         self._save()
+
+    def _merge_missing_defaults(self) -> bool:
+        changed = False
+        for key, default_value in DEFAULT_DICTIONARY.items():
+            if key not in self._data:
+                self._data[key] = deepcopy(default_value)
+                changed = True
+        return changed
 
     def _check_external_change(self) -> None:
         """Reload if the file was modified externally (e.g. by Aqua Dictation)."""

@@ -17,7 +17,7 @@ from backend.models.audio_stream import AudioStreamManager
 from backend.models.pipeline import TranscriptionPipeline
 from backend.models.schemas import SessionStatus, TranscriptEntry
 from backend.storage.file_store import save_session
-from backend.core.segmentation_refiner import SegmentationRefiner
+from backend.core.segmentation_refiner import SegmentationRefiner, should_run_segmentation_refinement
 from backend.core.text_refiner import TextRefiner
 from backend.storage.dictionary_store import get_dictionary_store
 from backend.storage.speaker_store import get_speaker_store
@@ -157,7 +157,7 @@ class TranscriptionSession:
                     loop.run_in_executor(None, self._transcriber.load_model),
                     loop.run_in_executor(None, self._diarizer.load_model),
                 ]
-                if settings.segmentation_refine_enabled and not self._refiner.is_loaded:
+                if should_run_segmentation_refinement() and not self._refiner.is_loaded:
                     loads.append(loop.run_in_executor(None, self._refiner.load_model))
                 await asyncio.gather(*loads)
             else:
@@ -192,7 +192,7 @@ class TranscriptionSession:
             self._pipeline_task = asyncio.create_task(self._pipeline.run())
 
             # Start segmentation refinement background task (Pass 2)
-            if settings.segmentation_refine_enabled and self._refiner.is_loaded:
+            if should_run_segmentation_refinement() and self._refiner.is_loaded:
                 self._refiner_task = asyncio.create_task(
                     self._refiner.run(
                         self._stop_event,
@@ -272,7 +272,7 @@ class TranscriptionSession:
                     pass
             self._refiner_task = None
 
-        await self._text_refiner.stop()
+        await self._text_refiner.stop(refine_pending=True)
 
         await self._update_speaker_profiles()
         self._auto_accumulate_samples()
@@ -349,7 +349,7 @@ class TranscriptionSession:
                 pass
             self._refiner_task = None
 
-        await self._text_refiner.stop()
+        await self._text_refiner.stop(refine_pending=False)
 
         # Delete any screenshots already saved for this session
         import shutil
