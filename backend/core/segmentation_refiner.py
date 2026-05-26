@@ -27,6 +27,15 @@ _CHUNK_DURATION = 10.0
 _FRAMES_PER_CHUNK = 767
 
 
+def should_run_segmentation_refinement() -> bool:
+    """Return whether delayed segmentation refinement should run."""
+    if not settings.segmentation_refine_enabled:
+        return False
+    if settings.segmentation_refine_allow_cpu:
+        return True
+    return bool(torch.cuda.is_available())
+
+
 class SegmentationRefiner:
     """Background refinement of speaker labels using segmentation model."""
 

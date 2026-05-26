@@ -12,6 +12,11 @@ from faster_whisper import WhisperModel
 
 from backend.config import settings
 from backend.core.vram_manager import check_temperature_safe, check_vram_available
+from backend.core.whispercpp_backend import (
+    WHISPER_CPP_MODEL_FILES,
+    WhisperCppServerBackend,
+    is_whisper_cpp_available,
+)
 from backend.storage.dictionary_store import get_dictionary_store
 
 logger = logging.getLogger(__name__)
@@ -39,6 +44,39 @@ INT8_MODELS: set[str] = set()
 KOTOBA_MODELS = {"kotoba-v2.0"}
 
 AVAILABLE_MODELS = list(VRAM_REQUIREMENTS.keys())
+
+DEFAULT_BEAM_SIZE = 5
+CPU_BEAM_SIZE = 1
+
+
+def _cuda_available() -> bool:
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _select_runtime(model_size: str) -> tuple[str, str]:
+    """Return Faster-Whisper device and compute_type for the current machine."""
+    if _cuda_available():
+        compute = "int8_float16" if model_size in INT8_MODELS else "float16"
+        return "cuda", compute
+    return "cpu", "int8"
+
+
+def _should_use_whisper_cpp(model_size: str) -> bool:
+    backend = settings.asr_backend.lower().replace("_", "-")
+    if backend in {"faster-whisper", "fasterwhisper"}:
+        return False
+    if backend in {"whisper.cpp", "whisper-cpp", "whispercpp"}:
+        return True
+    return (
+        not _cuda_available()
+        and model_size in WHISPER_CPP_MODEL_FILES
+        and is_whisper_cpp_available(model_size)
+    )
 
 
 def _resolve_model_id(model_size: str) -> str:
@@ -88,65 +126,134 @@ def warm_disk_cache(model_size: str) -> dict:
 
 
 class Transcriber:
-    """Wraps Faster-Whisper for GPU-accelerated transcription."""
+    """Wraps Faster-Whisper for transcription."""
 
     def __init__(self, model_size: str | None = None):
         self.model_size = model_size or settings.whisper_model
         self._model: WhisperModel | None = None
+        self._whisper_cpp: WhisperCppServerBackend | None = None
         self._initial_prompt: str = ""
         self._hotwords: str = ""
         # Loading stage tracking for progress UI
         self._loading_stage: str = ""  # "", "unloading", "warming", "loading", "ready"
         self._loading_progress: float = 0.0  # 0.0 - 1.0
         self._cache_warm_thread: threading.Thread | None = None
+        self._runtime_device: str = ""
+        self._runtime_compute: str = ""
 
     def load_model(self) -> None:
-        """Load the Whisper model onto GPU."""
-        if self._model is not None:
+        """Load the Whisper model."""
+        if self.is_loaded:
             return
 
-        required_mb = VRAM_REQUIREMENTS.get(self.model_size, 3000)
-        if not check_vram_available(required_mb):
-            logger.warning(
-                "Insufficient VRAM for %s (need %dMB). Loading anyway...",
+        if _should_use_whisper_cpp(self.model_size):
+            logger.info("Loading whisper.cpp backend for %s", self.model_size)
+            self._loading_stage = "loading"
+            self._loading_progress = 0.3
+            t0 = time.monotonic()
+            self._whisper_cpp = WhisperCppServerBackend(self.model_size)
+            self._whisper_cpp.load_model()
+            elapsed = time.monotonic() - t0
+            self._runtime_device = "vulkan"
+            self._runtime_compute = "whisper.cpp"
+            self._loading_stage = "ready"
+            self._loading_progress = 1.0
+            logger.info(
+                "whisper.cpp %s loaded in %.1fs (device=vulkan)",
                 self.model_size,
-                required_mb,
+                elapsed,
             )
+            return
 
         # Resolve HuggingFace model ID if needed
         model_id = MODEL_HF_IDS.get(self.model_size, self.model_size)
-        compute = "int8_float16" if self.model_size in INT8_MODELS else "float16"
+        device, compute = _select_runtime(self.model_size)
 
-        logger.info("Loading Faster-Whisper model: %s (%s, %s)", self.model_size, model_id, compute)
+        if device == "cuda":
+            required_mb = VRAM_REQUIREMENTS.get(self.model_size, 3000)
+            if not check_vram_available(required_mb):
+                logger.warning(
+                    "Insufficient VRAM for %s (need %dMB). Loading anyway...",
+                    self.model_size,
+                    required_mb,
+                )
+        else:
+            logger.warning(
+                "CUDA is not available; loading Faster-Whisper %s on CPU (%s).",
+                self.model_size,
+                compute,
+            )
+
+        logger.info(
+            "Loading Faster-Whisper model: %s (%s, device=%s, compute=%s)",
+            self.model_size,
+            model_id,
+            device,
+            compute,
+        )
         self._loading_stage = "loading"
         self._loading_progress = 0.3
         t0 = time.monotonic()
 
         self._model = WhisperModel(
             model_id,
-            device="cuda",
+            device=device,
             compute_type=compute,
         )
+        self._runtime_device = device
+        self._runtime_compute = compute
 
         elapsed = time.monotonic() - t0
         self._loading_stage = "ready"
         self._loading_progress = 1.0
-        logger.info("Whisper %s loaded in %.1fs (compute=%s)", self.model_size, elapsed, compute)
+        logger.info(
+            "Whisper %s loaded in %.1fs (device=%s, compute=%s)",
+            self.model_size,
+            elapsed,
+            device,
+            compute,
+        )
 
     def unload_model(self) -> None:
         """Release the model and free VRAM."""
+        if self._whisper_cpp is not None:
+            self._loading_stage = "unloading"
+            self._loading_progress = 0.1
+            self._whisper_cpp.unload_model()
+            self._whisper_cpp = None
+            self._runtime_device = ""
+            self._runtime_compute = ""
+            logger.info("whisper.cpp backend unloaded")
+
         if self._model is not None:
             self._loading_stage = "unloading"
             self._loading_progress = 0.1
             del self._model
             self._model = None
+            self._runtime_device = ""
+            self._runtime_compute = ""
 
             import gc
             import torch
 
             gc.collect()
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             logger.info("Whisper model unloaded")
+
+    def _decode_options(self) -> dict:
+        """Return Faster-Whisper decode options for the active runtime."""
+        if self._runtime_device == "cpu":
+            # CPU decoding must keep up with live audio. Beam search 5 is much
+            # slower on kotoba-v2.0 and causes realtime backlog on non-CUDA GPUs.
+            return {
+                "beam_size": CPU_BEAM_SIZE,
+                "best_of": 1,
+                "temperature": 0.0,
+            }
+        return {
+            "beam_size": DEFAULT_BEAM_SIZE,
+        }
 
     def build_vocab_hints(self) -> None:
         """Build initial_prompt and hotwords from the dictionary.
@@ -208,7 +315,9 @@ class Transcriber:
             dict with keys: text, language, confidence
         """
         if self._model is None:
-            raise RuntimeError("Model not loaded. Call load_model() first.")
+            if self._whisper_cpp is None:
+                raise RuntimeError("Model not loaded. Call load_model() first.")
+            return self._whisper_cpp.transcribe(audio, sample_rate)
 
         if not check_temperature_safe(settings.gpu_temp_warning):
             logger.warning("GPU temperature high, transcription may be slower")
@@ -229,11 +338,12 @@ class Transcriber:
             if self._hotwords:
                 kwargs["hotwords"] = self._hotwords
 
+        decode_options = self._decode_options()
         segments, info = self._model.transcribe(
             audio,
             language=settings.whisper_language,
-            beam_size=5,
             vad_filter=False,  # We do our own VAD
+            **decode_options,
             **kwargs,
         )
 
@@ -263,9 +373,11 @@ class Transcriber:
             compression_ratio = 0.0
 
         logger.info(
-            "Transcribed %.1fs audio in %.1fs (no_speech=%.3f, logprob=%.3f, comp=%.2f): %s",
+            "Transcribed %.1fs audio in %.1fs (device=%s, beam=%s, no_speech=%.3f, logprob=%.3f, comp=%.2f): %s",
             len(audio) / sample_rate,
             elapsed,
+            self._runtime_device or "unknown",
+            decode_options.get("beam_size"),
             no_speech_prob,
             avg_logprob,
             compression_ratio,
@@ -310,4 +422,6 @@ class Transcriber:
 
     @property
     def is_loaded(self) -> bool:
-        return self._model is not None
+        return self._model is not None or (
+            self._whisper_cpp is not None and self._whisper_cpp.is_loaded
+        )
