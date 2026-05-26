@@ -1,7 +1,8 @@
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::io::{BufRead, BufReader};
 use std::thread;
+use std::time::Duration;
 
 use log::{error, info, warn};
 
@@ -46,39 +47,39 @@ impl AudioSidecarManager {
             .replace("http://", "ws://")
             .replace("https://", "wss://");
 
-        // Find the audio sidecar binary
+        // Find the audio sidecar binary or Python script.
         let exe_dir = std::env::current_exe()
             .map_err(|e| e.to_string())?
             .parent()
             .ok_or("Cannot find exe dir")?
             .to_path_buf();
 
-        // In production: sidecar/audio_sidecar.exe
-        // In dev: look for python script
-        let sidecar_exe = exe_dir.join("sidecar").join("audio_sidecar.exe");
+        let sidecar_name = if cfg!(target_os = "windows") {
+            "audio_sidecar.exe"
+        } else {
+            "audio_sidecar"
+        };
+        let sidecar_exe = exe_dir.join("sidecar").join(sidecar_name);
 
         let mut cmd = if sidecar_exe.exists() {
             let mut c = Command::new(&sidecar_exe);
             c.args(["--server", &ws_url, "--client-id", client_id]);
             c
-        } else if cfg!(debug_assertions) {
-            // Dev mode: run Python script directly
-            let script = std::env::var("AUDIO_SIDECAR_SCRIPT")
-                .unwrap_or_else(|_| {
-                    exe_dir.parent()
-                        .and_then(|p| p.parent())
-                        .and_then(|p| p.parent())
-                        .and_then(|p| p.parent())
-                        .map(|p| p.join("audio_sidecar").join("main.py"))
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string()
-                });
-            let mut c = Command::new("python");
-            c.args([&script, "--server", &ws_url, "--client-id", client_id]);
+        } else if let Some(script) = resolve_python_sidecar_script(&exe_dir) {
+            let mut c = Command::new(python_command_for_script(&script));
+            c.args([
+                script.to_string_lossy().as_ref(),
+                "--server",
+                &ws_url,
+                "--client-id",
+                client_id,
+            ]);
             c
         } else {
-            return Err(format!("Audio sidecar not found: {}", sidecar_exe.display()));
+            return Err(format!(
+                "Audio sidecar not found: {} or audio_sidecar/main.py",
+                sidecar_exe.display()
+            ));
         };
 
         if !token.is_empty() {
@@ -94,23 +95,15 @@ impl AudioSidecarManager {
             cmd.args(["--loopback", &idx.to_string()]);
         }
 
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
-        // Log resolved script path in dev mode
-        if cfg!(debug_assertions) && !sidecar_exe.exists() {
-            let resolved = exe_dir.parent()
-                .and_then(|p| p.parent())
-                .and_then(|p| p.parent())
-                .and_then(|p| p.parent())
-                .map(|p| p.join("audio_sidecar").join("main.py"));
+        if !sidecar_exe.exists() {
+            let resolved = resolve_python_sidecar_script(&exe_dir);
             info!("Audio sidecar exe_dir: {}", exe_dir.display());
             info!("Audio sidecar resolved script: {:?}", resolved);
-            if let Some(ref path) = resolved {
-                info!("Audio sidecar script exists: {}", path.exists());
-            }
         }
 
         info!("Starting audio sidecar: server={}, client={}", ws_url, client_id);
@@ -183,6 +176,26 @@ impl AudioSidecarManager {
 
         if let Some(mut child) = guard.take() {
             info!("Stopping audio sidecar...");
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(b"stop\n");
+                let _ = stdin.flush();
+            }
+
+            for _ in 0..50 {
+                match child.try_wait() {
+                    Ok(Some(_)) => {
+                        info!("Audio sidecar stopped gracefully");
+                        return;
+                    }
+                    Ok(None) => thread::sleep(Duration::from_millis(100)),
+                    Err(e) => {
+                        error!("Failed to poll audio sidecar shutdown: {}", e);
+                        break;
+                    }
+                }
+            }
+
+            warn!("Audio sidecar did not stop in time; killing process");
             let _ = child.kill();
             let _ = child.wait();
             info!("Audio sidecar stopped");
@@ -207,6 +220,71 @@ impl AudioSidecarManager {
             false
         }
     }
+}
+
+fn python_command_for_script(script: &std::path::Path) -> std::path::PathBuf {
+    if let Some(sidecar_dir) = script.parent() {
+        let venv_python = if cfg!(target_os = "windows") {
+            sidecar_dir.join(".venv").join("Scripts").join("python.exe")
+        } else {
+            sidecar_dir.join(".venv").join("bin").join("python")
+        };
+        if venv_python.exists() {
+            return venv_python;
+        }
+    }
+
+    if cfg!(target_os = "windows") {
+        std::path::PathBuf::from("python")
+    } else {
+        std::path::PathBuf::from("python3")
+    }
+}
+
+fn resolve_python_sidecar_script(exe_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    if let Ok(path) = std::env::var("AUDIO_SIDECAR_SCRIPT") {
+        let path = std::path::PathBuf::from(path);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    let mut candidates = Vec::new();
+
+    // Dev mode: tauri-app/src-tauri/target/debug/<app>
+    if let Some(path) = exe_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .map(|p| p.join("audio_sidecar").join("main.py"))
+    {
+        candidates.push(path);
+    }
+
+    // Release bundles built from this source tree can still use the prepared
+    // local venv, which keeps Mac client builds usable without system packages.
+    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
+        candidates.push(
+            std::path::PathBuf::from(manifest_dir)
+                .join("..")
+                .join("..")
+                .join("audio_sidecar")
+                .join("main.py"),
+        );
+    }
+
+    // Bundled resource variants.
+    candidates.push(exe_dir.join("audio_sidecar").join("main.py"));
+    candidates.push(exe_dir.join("resources").join("audio_sidecar").join("main.py"));
+    if let Some(path) = exe_dir
+        .parent()
+        .map(|p| p.join("Resources").join("audio_sidecar").join("main.py"))
+    {
+        candidates.push(path);
+    }
+
+    candidates.into_iter().find(|path| path.exists())
 }
 
 impl Drop for AudioSidecarManager {

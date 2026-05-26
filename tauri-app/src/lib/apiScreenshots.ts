@@ -1,8 +1,8 @@
-import { apiFetch, BASE_URL } from "./api";
+import { apiFetch, getBaseUrl } from "./api";
 import type { ScreenshotsResponse, ScreenCaptureConfig } from "./types";
 
 export function getScreenshotUrl(sessionId: string, filename: string): string {
-  return `${BASE_URL}/api/screenshots/${sessionId}/${filename}`;
+  return `${getBaseUrl()}/api/screenshots/${sessionId}/${filename}`;
 }
 
 export async function listScreenshots(sessionId: string): Promise<ScreenshotsResponse> {

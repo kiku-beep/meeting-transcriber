@@ -32,3 +32,34 @@
 - Added `-BindHost` and `-Port` parameters.
 - Added Tailscale IP auto-detection via `tailscale ip -4`, falling back to `0.0.0.0` with a warning.
 - Updated README server startup instructions for Chrome Remote Desktop/company PC setup.
+
+## 2026-05-26
+
+- Cloned `https://github.com/kiku-beep/meeting-transcriber.git` branch `transcriber` into the current workspace.
+- Opened PR #3 context from GitHub and confirmed the branch summary is focused on local ASR/non-CUDA updates plus runtime safeguards.
+- User clarified that backend work is on another PC; this Mac should own the frontend/client side and send data to the backend.
+- Inspected Tauri app, API client, WebSocket client, recording controls, settings, Rust sidecar launcher, and Python audio sidecar.
+- Identified the main implementation gap: current capture sidecar is Windows/WASAPI-only and production packaging is Windows-only, while the React UI has partial remote-server support.
+- Added current-session goal, clear conditions, findings, and progress notes to planning files.
+- Implemented persisted remote server URL, auth token, and stable client ID handling in the Tauri frontend.
+- Added a connection-first backend loader for remote URL/token setup.
+- Added Mac/Linux `sounddevice` support to `audio_sidecar/main.py`, while preserving Windows `pyaudiowpatch` support.
+- Added graceful audio sidecar shutdown over stdin so the Python sidecar can send `stop` to the backend before exiting.
+- Added `scripts/setup_mac_client.sh` to install audio sidecar dependencies, frontend dependencies, and copy `.env.remote` to `.env.local`.
+- Updated Tauri bundle config to use platform-specific `all` targets and include `audio_sidecar` as a resource.
+- Ran `scripts/setup_mac_client.sh`; it installed the Mac sidecar venv and frontend dependencies.
+- Ran `audio_sidecar/.venv/bin/python audio_sidecar/main.py --list-devices --server ws://127.0.0.1:8000 --client-id test`; detected MacBook mic only, no BlackHole/Soundflower loopback.
+- Ran `audio_sidecar/.venv/bin/python audio_sidecar/main.py --server ws://127.0.0.1:9 --client-id test --no-loopback`; confirmed startup exits non-zero when the backend WebSocket cannot be reached immediately.
+- Ran `npm run build` successfully after dependency install.
+- Ran `npm run tauri dev`; blocked because Rust/Cargo is not installed on this Mac.
+- Ran `npx playwright test`; all tests failed before execution because Playwright Chromium was missing.
+- Attempted `npx playwright install chromium`; download reached 100% but install hung, so the install process was stopped.
+- Verified the Vite UI with Codex in-app browser at `http://127.0.0.1:1430/`, including connection screen, main transcription screen, and settings screen.
+- Installed Rust with `rustup`; verified `rustc 1.95.0`, `cargo 1.95.0`, and the stable aarch64 Apple toolchain.
+- Ran `npm run tauri dev`; Rust compiled successfully and launched the native `transcriber` app in dev mode.
+- Confirmed the dev frontend responded with HTTP 200 on `http://localhost:1430/` and the native process appeared as a foreground macOS app via `lsappinfo`.
+- Updated the Rust audio sidecar resolver so release bundles built from this source tree can use `audio_sidecar/.venv` before falling back to bundled script resources.
+- Removed the macOS Rust unused-import warning by making `tauri::Manager` Windows-only.
+- Ran `npm run tauri build`; generated `Transcriber.app` and `Transcriber_0.1.0_aarch64.dmg`.
+- Resolved a transient DMG bundling failure by detaching a leftover writable image and rerunning the build.
+- Launched `Transcriber.app` from the generated macOS bundle and confirmed it registered as a foreground ARM64 app process.

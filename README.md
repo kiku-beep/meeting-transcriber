@@ -16,13 +16,13 @@ NVIDIA GPU搭載のWindows PCで動作するリアルタイム会議文字起こ
 
 | 項目 | 要件 |
 |------|------|
-| OS | Windows 10/11（WASAPI必須） |
-| GPU | NVIDIA GPU + CUDA 12.x（RTX 3060以上推奨、VRAM 8GB+） |
+| OS | バックエンド: Windows 10/11 / クライアント: macOS または Windows |
+| GPU | バックエンドのみ NVIDIA GPU + CUDA 12.x（RTX 3060以上推奨、VRAM 8GB+） |
 | Python | 3.10〜3.12 |
 | Node.js | 18以上（Tauriフロントエンド用） |
 | Rust | stable（Tauriビルド用） |
 
-> **注意**: `PyAudioWPatch`（WASAPIループバック）はWindows専用です。Mac/Linuxでは音声キャプチャ部分の書き換えが必要です。
+> **注意**: ローカル構成の音声キャプチャはWindows WASAPI前提です。リモート構成のMacクライアントは `sounddevice` を使い、PC音声の取得にはBlackHole/Soundflower等の仮想ループバック入力が必要です。
 
 ## 構成パターン
 
@@ -147,19 +147,23 @@ GPU不要。Node.js + Rust + Tailscale があれば動作します。
 # 1. Tailscale をインストールし、同じ tailnet にログイン
 # 2. リポジトリをクローン
 git clone https://github.com/kiku-beep/meeting-transcriber.git
-cd meeting-transcriber/tauri-app
-npm install
+cd meeting-transcriber
 
-# 3. 接続先を設定（.env.remote をコピー）
-cp .env.remote .env.local
+# 3. Macクライアントの依存をセットアップ
+scripts/setup_mac_client.sh
 
 # 4. 起動
+cd tauri-app
 npm run tauri dev
 ```
 
 > `.env.remote` にサーバーの Tailscale URL がプリセットされています。
 > 環境変数 `VITE_BACKEND_URL` でバックエンドの接続先を変更できます。
 > 未設定時は `http://127.0.0.1:8000`（ローカル）に接続します。
+> アプリ起動後の接続画面または設定画面から、別PCバックエンドのURLを保存できます。
+
+macOSでPC音声も送る場合は、BlackHole または Soundflower のような仮想ループバック入力が必要です。
+未設定でもマイク音声のみで録音開始できます。
 
 ## Whisperモデル一覧
 

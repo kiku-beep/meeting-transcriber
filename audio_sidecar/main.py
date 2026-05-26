@@ -1,7 +1,7 @@
 """Audio capture sidecar for Transcriber client.
 
-Captures microphone and/or system audio (WASAPI loopback) on the local PC
-and streams PCM16 data to the remote transcription server via WebSocket.
+Captures microphone and/or system audio on the local client and streams
+PCM16 data to the remote transcription server via WebSocket.
 
 Usage:
     python main.py --server ws://192.168.1.100:8000 --client-id my-pc
@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 from math import gcd
+from urllib.parse import urlencode
 
 import numpy as np
 
@@ -37,6 +38,14 @@ _stop = threading.Event()
 
 def list_devices():
     """Print all audio devices and exit."""
+    if sys.platform == "win32":
+        list_devices_windows()
+    else:
+        list_devices_portaudio()
+
+
+def list_devices_windows():
+    """Print Windows WASAPI devices."""
     import pyaudiowpatch as pyaudio
 
     p = pyaudio.PyAudio()
@@ -58,7 +67,41 @@ def list_devices():
     p.terminate()
 
 
+def list_devices_portaudio():
+    """Print PortAudio devices for macOS/Linux clients."""
+    import sounddevice as sd
+
+    print("\n=== Audio Devices ===")
+    default_input, default_output = sd.default.device
+    hostapis = sd.query_hostapis()
+    for i, dev in enumerate(sd.query_devices()):
+        direction = []
+        if dev["max_input_channels"] > 0:
+            direction.append("IN")
+        if dev["max_output_channels"] > 0:
+            direction.append("OUT")
+        host_api = hostapis[dev["hostapi"]]["name"]
+        default_tags = []
+        if i == default_input:
+            default_tags.append("DEFAULT_IN")
+        if i == default_output:
+            default_tags.append("DEFAULT_OUT")
+        tag = f" [{' '.join(default_tags)}]" if default_tags else ""
+        print(
+            f"  [{i}] {dev['name']} ({'/'.join(direction)}) "
+            f"- {int(dev['default_samplerate'])}Hz, "
+            f"{dev['max_input_channels']}ch in, host={host_api}{tag}"
+        )
+
+
 def get_default_devices():
+    """Find default microphone and loopback devices for this OS."""
+    if sys.platform == "win32":
+        return get_default_devices_windows()
+    return get_default_devices_portaudio()
+
+
+def get_default_devices_windows():
     """Find default WASAPI mic and loopback devices."""
     import pyaudiowpatch as pyaudio
 
@@ -92,11 +135,42 @@ def get_default_devices():
     return mic_index, loopback_index
 
 
-def resample_to_16k(audio: np.ndarray, source_rate: int, source_channels: int) -> np.ndarray:
+MAC_LOOPBACK_KEYWORDS = ("blackhole", "soundflower", "loopback", "monitor")
+
+
+def get_default_devices_portaudio():
+    """Find default microphone and a likely virtual loopback input."""
+    import sounddevice as sd
+
+    devices = sd.query_devices()
+    default_input = sd.default.device[0]
+
+    mic_index = None
+    if isinstance(default_input, int) and default_input >= 0:
+        mic_index = default_input
+    else:
+        for i, dev in enumerate(devices):
+            if dev["max_input_channels"] > 0:
+                mic_index = i
+                break
+
+    loopback_index = None
+    for i, dev in enumerate(devices):
+        name = str(dev["name"]).lower()
+        if dev["max_input_channels"] > 0 and any(k in name for k in MAC_LOOPBACK_KEYWORDS):
+            loopback_index = i
+            break
+
+    return mic_index, loopback_index
+
+
+def resample_to_16k(audio: np.ndarray, source_rate: int, source_channels: int | None) -> np.ndarray:
     """Convert audio to 16kHz mono float32."""
-    if source_channels > 1:
-        stereo = audio.reshape(-1, source_channels)
-        audio = stereo[:, 0].copy()
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.ndim == 2:
+        audio = audio.mean(axis=1)
+    elif source_channels and source_channels > 1:
+        audio = audio.reshape(-1, source_channels).mean(axis=1)
     if source_rate != 16000:
         from scipy.signal import resample_poly
 
@@ -112,7 +186,53 @@ def audio_to_pcm16_bytes(audio: np.ndarray) -> bytes:
     return int16.tobytes()
 
 
-def stream_audio(
+def build_audio_ws_url(ws_url: str, client_id: str, source: str, token: str = "") -> str:
+    params = {"source": source}
+    if token:
+        params["token"] = token
+    return f"{ws_url}/ws/audio/{client_id}?{urlencode(params)}"
+
+
+def connect_audio_ws(ws_url: str, client_id: str, source: str, token: str = ""):
+    import websocket
+
+    url = build_audio_ws_url(ws_url, client_id, source, token)
+    return websocket.create_connection(
+        url,
+        timeout=10,
+        header={"Origin": f"http://{ws_url.split('//')[1].split('/')[0]}"},
+    )
+
+
+def send_start_if_needed(ws, source: str, session_name: str = ""):
+    if source != "mic":
+        return
+    ws.send(json.dumps({
+        "type": "start",
+        "session_name": session_name,
+        "source": source,
+    }))
+    resp = ws.recv()
+    logger.info("Start response: %s", resp)
+    try:
+        payload = json.loads(resp)
+    except json.JSONDecodeError:
+        return
+    if payload.get("type") == "error":
+        raise RuntimeError(payload.get("detail") or "Server rejected recording start")
+
+
+def send_stop_if_needed(ws, source: str):
+    if source != "mic":
+        return
+    try:
+        ws.send(json.dumps({"type": "stop"}))
+        ws.recv()
+    except Exception:
+        logger.debug("Failed to send stop control message", exc_info=True)
+
+
+def stream_audio_windows(
     ws_url: str,
     client_id: str,
     source: str,
@@ -120,39 +240,18 @@ def stream_audio(
     token: str = "",
     session_name: str = "",
 ):
-    """Capture audio from a device and stream via WebSocket.
-
-    This runs in its own thread.
-    """
+    """Capture audio from a Windows WASAPI device and stream via WebSocket."""
     import pyaudiowpatch as pyaudio
-    import websocket
-
-    # Build WebSocket URL
-    params = f"source={source}"
-    if token:
-        params += f"&token={token}"
-    url = f"{ws_url}/ws/audio/{client_id}?{params}"
 
     logger.info("Connecting to %s (device=%d, source=%s)", ws_url, device_index, source)
 
     ws = None
+    p = None
     try:
-        ws = websocket.create_connection(
-            url,
-            timeout=10,
-            header={"Origin": f"http://{ws_url.split('//')[1].split('/')[0]}"},
-        )
+        ws = connect_audio_ws(ws_url, client_id, source, token)
         logger.info("WebSocket connected for %s", source)
 
-        # Send start control message (only from mic stream)
-        if source == "mic":
-            ws.send(json.dumps({
-                "type": "start",
-                "session_name": session_name,
-                "source": source,
-            }))
-            resp = ws.recv()
-            logger.info("Start response: %s", resp)
+        send_start_if_needed(ws, source, session_name)
 
         p = pyaudio.PyAudio()
         dev_info = p.get_device_info_by_index(device_index)
@@ -207,18 +306,100 @@ def stream_audio(
 
         stream.stop_stream()
         stream.close()
-        p.terminate()
 
-        # Send stop control message (only from mic stream)
-        if source == "mic":
-            try:
-                ws.send(json.dumps({"type": "stop"}))
-                ws.recv()
-            except Exception:
-                pass
+        send_stop_if_needed(ws, source)
 
     except Exception:
         logger.exception("Audio stream error (%s)", source)
+        if source == "mic":
+            _stop.set()
+    finally:
+        if p:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        if ws:
+            try:
+                ws.close()
+            except Exception:
+                pass
+        logger.info("%s stream stopped", source)
+
+
+def stream_audio_portaudio(
+    ws_url: str,
+    client_id: str,
+    source: str,
+    device_index: int,
+    token: str = "",
+    session_name: str = "",
+):
+    """Capture audio from a PortAudio input device and stream via WebSocket."""
+    import sounddevice as sd
+
+    logger.info("Connecting to %s (device=%d, source=%s)", ws_url, device_index, source)
+
+    ws = None
+    try:
+        ws = connect_audio_ws(ws_url, client_id, source, token)
+        logger.info("WebSocket connected for %s", source)
+
+        send_start_if_needed(ws, source, session_name)
+
+        dev_info = sd.query_devices(device_index, "input")
+        sample_rate = int(dev_info["default_samplerate"])
+        channels = min(int(dev_info["max_input_channels"]), 2)
+        if channels <= 0:
+            raise RuntimeError(f"Device {device_index} has no input channels")
+        blocksize = sample_rate // 10  # 100ms chunks
+
+        logger.info(
+            "Opening %s: %s (%dHz, %dch)",
+            source, dev_info["name"], sample_rate, channels,
+        )
+
+        cb_count = 0
+
+        def callback(indata, frames, time_info, status):
+            nonlocal cb_count
+            if status:
+                logger.warning("%s stream status: %s", source, status)
+            if _stop.is_set():
+                raise sd.CallbackStop()
+
+            audio = resample_to_16k(indata, sample_rate, channels)
+
+            cb_count += 1
+            if cb_count % 100 == 1:
+                amp = float(np.max(np.abs(audio))) if len(audio) > 0 else 0.0
+                logger.info("%s cb #%d: len=%d, amp=%.4f", source, cb_count, len(audio), amp)
+
+            try:
+                ws.send_binary(audio_to_pcm16_bytes(audio))
+            except Exception:
+                logger.warning("Failed to send %s audio", source)
+                _stop.set()
+                raise sd.CallbackStop()
+
+        with sd.InputStream(
+            device=device_index,
+            channels=channels,
+            samplerate=sample_rate,
+            dtype="float32",
+            blocksize=blocksize,
+            callback=callback,
+        ):
+            logger.info("%s stream started", source)
+            while not _stop.is_set():
+                _stop.wait(timeout=0.5)
+
+        send_stop_if_needed(ws, source)
+
+    except Exception:
+        logger.exception("Audio stream error (%s)", source)
+        if source == "mic":
+            _stop.set()
     finally:
         if ws:
             try:
@@ -226,6 +407,33 @@ def stream_audio(
             except Exception:
                 pass
         logger.info("%s stream stopped", source)
+
+
+def stream_audio(
+    ws_url: str,
+    client_id: str,
+    source: str,
+    device_index: int,
+    token: str = "",
+    session_name: str = "",
+):
+    """Capture audio from a device and stream via WebSocket in its own thread."""
+    if sys.platform == "win32":
+        stream_audio_windows(ws_url, client_id, source, device_index, token, session_name)
+    else:
+        stream_audio_portaudio(ws_url, client_id, source, device_index, token, session_name)
+
+
+def watch_stdin_for_stop():
+    """Allow the Tauri parent process to ask for a graceful shutdown."""
+    try:
+        for line in sys.stdin:
+            if line.strip().lower() in {"stop", "quit", "exit"}:
+                logger.info("Received stdin stop command")
+                _stop.set()
+                break
+    except Exception:
+        logger.debug("stdin watcher ended", exc_info=True)
 
 
 def main():
@@ -245,6 +453,8 @@ def main():
         list_devices()
         sys.exit(0)
 
+    threading.Thread(target=watch_stdin_for_stop, daemon=True).start()
+
     # Resolve device indices
     mic_index = args.mic
     loopback_index = args.loopback
@@ -263,6 +473,11 @@ def main():
     logger.info("Using mic device: %d", mic_index)
     if loopback_index is not None:
         logger.info("Using loopback device: %d", loopback_index)
+    elif sys.platform == "darwin" and not args.no_loopback:
+        logger.warning(
+            "No macOS loopback device found. System audio is disabled; "
+            "install BlackHole or Soundflower and select it as the meeting audio output."
+        )
 
     # Handle signals
     def signal_handler(sig, frame):
@@ -286,6 +501,9 @@ def main():
     if loopback_index is not None:
         # Small delay to let mic start first and create the session
         time.sleep(1)
+        if _stop.is_set():
+            logger.error("Microphone stream failed before loopback start")
+            sys.exit(1)
         lb_thread = threading.Thread(
             target=stream_audio,
             args=(args.server, args.client_id, "loopback", loopback_index, args.token),
@@ -295,6 +513,10 @@ def main():
         threads.append(lb_thread)
 
     # Output ready signal for Tauri to detect
+    time.sleep(0.2)
+    if _stop.is_set():
+        logger.error("Audio sidecar failed during startup")
+        sys.exit(1)
     print("SIDECAR_READY", flush=True)
 
     # Wait for stop

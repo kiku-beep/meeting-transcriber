@@ -3,7 +3,7 @@ import { getGpuStatus, getHealth, getAudioDevices } from "../lib/apiHealth";
 import { getModelStatus, switchModel, warmModelCache, getModelLoadingStatus } from "../lib/apiSession";
 import { getGeminiModels, setGeminiModel } from "../lib/apiSummary";
 import { getConfigStatus, setTextRefine } from "../lib/apiConfig";
-import { getBaseUrl, setServerUrl, setAuthToken, getAuthToken } from "../lib/api";
+import { getBaseUrl, setServerUrl, setAuthToken, getAuthToken, getClientId, resetClientId } from "../lib/api";
 import type { GpuStatus, AudioDevice, ModelStatus, GeminiModelInfo } from "../lib/types";
 import SettingsApiKey from "./settings/SettingsApiKey";
 import SettingsWhisperModel from "./settings/SettingsWhisperModel";
@@ -118,14 +118,20 @@ export default function Settings() {
 
   const [serverUrlInput, setServerUrlInput] = useState(getBaseUrl());
   const [authTokenInput, setAuthTokenInput] = useState(getAuthToken());
+  const [clientId, setClientIdValue] = useState(getClientId());
   const [serverSaved, setServerSaved] = useState(false);
 
-  const handleSaveServerUrl = () => {
+  const handleSaveServerUrl = async () => {
     setServerUrl(serverUrlInput);
+    setServerUrlInput(getBaseUrl());
     setAuthToken(authTokenInput);
     setServerSaved(true);
     setTimeout(() => setServerSaved(false), 2000);
-    refresh(); // Re-fetch health etc. from new server
+    await refresh(); // Re-fetch health etc. from new server
+  };
+
+  const handleResetClientId = () => {
+    setClientIdValue(resetClientId());
   };
 
   return (
@@ -142,7 +148,7 @@ export default function Settings() {
       {/* Server Connection */}
       <section className="space-y-2">
         <h3 className="text-sm font-medium text-slate-300">サーバー接続</h3>
-        <p className="text-xs text-slate-500">バックエンドサーバーのURLを指定（リモートサーバー使用時に変更）</p>
+        <p className="text-xs text-slate-500">別PCで動いているバックエンドサーバーのURLを指定します</p>
         <div className="flex gap-2">
           <input
             type="text"
@@ -165,6 +171,16 @@ export default function Settings() {
             className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-sm font-medium shrink-0"
           >
             {serverSaved ? "保存済み" : "接続"}
+          </button>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-slate-500">
+          <span>Client ID:</span>
+          <span className="font-mono text-slate-400">{clientId}</span>
+          <button
+            onClick={handleResetClientId}
+            className="ml-2 text-slate-400 hover:text-slate-200 underline"
+          >
+            再生成
           </button>
         </div>
       </section>

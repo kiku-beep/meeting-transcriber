@@ -171,6 +171,10 @@ export default function Transcription({ onSessionStop }: Props) {
   }, [sessionName]);
 
   const handlePause = async () => {
+    if (isRemoteMode()) {
+      setError("リモート録音の一時停止は未対応です。停止してから再開してください。");
+      return;
+    }
     try {
       await pauseSession();
     } catch (e) {
@@ -182,8 +186,12 @@ export default function Transcription({ onSessionStop }: Props) {
     setLoading(true);
     try {
       if (isRemoteMode()) {
-        // Stop audio sidecar (which sends "stop" to server)
+        const remoteSessionId = status?.session_id;
         await stopAudioSidecar();
+        if (remoteSessionId) {
+          onSessionStop(remoteSessionId);
+          return;
+        }
       }
       const info = await stopSession();
       onSessionStop(info.session_id);
