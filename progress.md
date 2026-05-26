@@ -76,3 +76,6 @@
 - Fixed the Tauri frontend so browser/Vite verification does not call `set_recording_icon` outside the native Tauri runtime.
 - Extended the mock backend with settings/model/summary/call-detection read endpoints so the app can use the mock without noisy `Not Found` errors.
 - Verified the Vite UI against the mock backend: connection health passed, `録音開始` created a fake transcript row, and the settings screen rendered without `Not Found`.
+- Added browser-runtime guards around audio sidecar `invoke` calls so remote Vite verification shows a clear Mac-app-only message instead of a raw Tauri runtime error.
+- Extended the mock backend with saved transcript, summary, playback, and screenshot read endpoints so stop-to-history UI verification no longer shows `Not Found`.
+- Verified remote mock settings/guard flow, localhost mock recording-to-history flow, `npm run build`, and `npm run tauri build`; relaunched the regenerated `Transcriber.app`.
