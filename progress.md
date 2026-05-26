@@ -63,3 +63,10 @@
 - Ran `npm run tauri build`; generated `Transcriber.app` and `Transcriber_0.1.0_aarch64.dmg`.
 - Resolved a transient DMG bundling failure by detaching a leftover writable image and rerunning the build.
 - Launched `Transcriber.app` from the generated macOS bundle and confirmed it registered as a foreground ARM64 app process.
+
+## 2026-05-27
+
+- Added `scripts/diagnose_server.ps1` for Chrome Remote Desktop/company PC backend setup.
+- The diagnostic checks Git, Python, Tailscale, NVIDIA GPU, CUDA/PyTorch, required Python modules, `%APPDATA%\transcriber\.env`, port 8000, and backend health endpoints.
+- Added static and PowerShell parse tests for the diagnostic script.
+- Ran the diagnostic locally with `-SkipHealth`; it correctly reported missing Tailscale/GPU on this non-server environment and showed suggested startup command.

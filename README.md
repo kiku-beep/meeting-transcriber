@@ -123,6 +123,15 @@ npm run tauri dev
 
 #### GPUサーバー側（バックエンド）
 
+まず会社PC上で診断を実行します：
+
+```powershell
+scripts\diagnose_server.ps1
+```
+
+この診断は Git / Python / Tailscale / NVIDIA GPU / CUDA版PyTorch / 主要依存 / `.env` / ポート / ヘルスチェックをまとめて確認します。
+バックエンド起動前に実行する場合やヘルスチェックを飛ばしたい場合は `scripts\diagnose_server.ps1 -SkipHealth` を使います。
+
 ```powershell
 # Tailscale IP にバインドしてサーバー起動
 scripts\start_server.ps1
