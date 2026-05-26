@@ -977,6 +977,7 @@ class TranscriptionSession:
 
 # ── Session Registry (multi-client support) ──────────────────────
 _sessions: dict[str, TranscriptionSession] = {}
+_client_connections: dict[str, int] = {}
 _default_session = TranscriptionSession()
 _sessions["default"] = _default_session
 
@@ -1018,6 +1019,29 @@ def client_session_count() -> int:
     return sum(1 for cid in _sessions if cid != "default")
 
 
+def register_client_connection(client_id: str) -> None:
+    """Track an active remote client connection for cleanup safety."""
+    if client_id == "default":
+        return
+    _client_connections[client_id] = _client_connections.get(client_id, 0) + 1
+
+
+def unregister_client_connection(client_id: str) -> None:
+    """Release a tracked remote client connection."""
+    if client_id == "default":
+        return
+    count = _client_connections.get(client_id, 0) - 1
+    if count > 0:
+        _client_connections[client_id] = count
+    else:
+        _client_connections.pop(client_id, None)
+
+
+def client_connection_count() -> int:
+    """Count client IDs with at least one active remote connection."""
+    return len(_client_connections)
+
+
 def _is_empty_idle_client_session(session: TranscriptionSession) -> bool:
     return (
         session.status == SessionStatus.IDLE
@@ -1031,7 +1055,11 @@ def empty_idle_client_session_count() -> int:
     return sum(
         1
         for cid, session in _sessions.items()
-        if cid != "default" and _is_empty_idle_client_session(session)
+        if (
+            cid != "default"
+            and cid not in _client_connections
+            and _is_empty_idle_client_session(session)
+        )
     )
 
 
@@ -1061,6 +1089,8 @@ def remove_session(client_id: str) -> None:
 def remove_empty_idle_client_session(client_id: str) -> bool:
     """Remove a client session only if it never started and has no entries."""
     if client_id == "default":
+        return False
+    if client_id in _client_connections:
         return False
     session = _sessions.get(client_id)
     if session is None or not _is_empty_idle_client_session(session):

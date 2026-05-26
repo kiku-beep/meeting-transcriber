@@ -8,6 +8,7 @@ def reset_registry(monkeypatch):
     default = session_mod.TranscriptionSession()
     monkeypatch.setattr(session_mod, "_default_session", default)
     monkeypatch.setattr(session_mod, "_sessions", {"default": default})
+    monkeypatch.setattr(session_mod, "_client_connections", {})
     return default
 
 
@@ -55,3 +56,19 @@ def test_empty_idle_client_sessions_can_be_cleaned_without_completed_sessions(mo
     assert "completed-client" in session_mod._sessions
     assert "running-client" in session_mod._sessions
     assert session_mod.empty_idle_client_session_count() == 0
+
+
+def test_connected_empty_idle_client_session_is_not_cleaned(monkeypatch):
+    reset_registry(monkeypatch)
+
+    session_mod.get_or_create_session("connected-client")
+    session_mod.register_client_connection("connected-client")
+
+    removed = session_mod.cleanup_empty_idle_client_sessions()
+
+    assert removed == []
+    assert "connected-client" in session_mod._sessions
+    assert session_mod.empty_idle_client_session_count() == 0
+
+    session_mod.unregister_client_connection("connected-client")
+    assert session_mod.cleanup_empty_idle_client_sessions() == ["connected-client"]

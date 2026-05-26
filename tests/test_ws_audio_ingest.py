@@ -13,6 +13,7 @@ def reset_registry(monkeypatch):
     default = session_mod.TranscriptionSession()
     monkeypatch.setattr(session_mod, "_default_session", default)
     monkeypatch.setattr(session_mod, "_sessions", {"default": default})
+    monkeypatch.setattr(session_mod, "_client_connections", {})
     return default
 
 

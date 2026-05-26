@@ -4,6 +4,7 @@ from backend.config import settings
 from backend.models.session import (
     active_session_count,
     cleanup_empty_idle_client_sessions,
+    client_connection_count,
     client_session_count,
     empty_idle_client_session_count,
     list_active_sessions,
@@ -27,6 +28,7 @@ async def server_diagnostics():
         "active_session_count": active_session_count(),
         "max_concurrent_sessions": settings.max_concurrent_sessions,
         "client_session_count": client_session_count(),
+        "connected_client_count": client_connection_count(),
         "empty_idle_session_count": empty_idle_client_session_count(),
     }
 

@@ -13,7 +13,9 @@ from starlette.websockets import WebSocketState
 from backend.models.session import (
     get_session,
     get_or_create_session,
+    register_client_connection,
     remove_empty_idle_client_session,
+    unregister_client_connection,
 )
 from backend.config import settings
 
@@ -49,8 +51,11 @@ async def ws_transcript(ws: WebSocket, client_id: str = Query("default")):
     _clients.add(ws)
     logger.info("WebSocket client connected (%d total, client=%s)", len(_clients), client_id)
 
+    use_client_session = settings.deployment_mode == "server" and client_id != "default"
+
     # In server mode, use client-specific session; in standalone, use default
-    if settings.deployment_mode == "server" and client_id != "default":
+    if use_client_session:
+        register_client_connection(client_id)
         session = get_or_create_session(client_id)
     else:
         session = get_session()
@@ -138,6 +143,7 @@ async def ws_transcript(ws: WebSocket, client_id: str = Query("default")):
     finally:
         reader_task.cancel()
         _clients.discard(ws)
-        if settings.deployment_mode == "server" and client_id != "default":
+        if use_client_session:
+            unregister_client_connection(client_id)
             remove_empty_idle_client_session(client_id)
         logger.info("WebSocket client disconnected (%d remaining)", len(_clients))
