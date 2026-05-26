@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -43,3 +44,37 @@ def test_audio_ws_reports_capacity_error_before_starting_session(monkeypatch):
 
     assert message["type"] == "error"
     assert "Max concurrent sessions" in message["detail"]
+
+
+def test_audio_ws_reports_auth_error_after_accept(monkeypatch):
+    reset_registry(monkeypatch)
+    monkeypatch.setattr(ws_audio_ingest.settings, "auth_token", "secret")
+
+    client = TestClient(make_app())
+    with client.websocket_connect("/ws/audio/alice?source=mic&token=wrong") as ws:
+        message = ws.receive_json()
+
+    assert message == {"type": "error", "detail": "Unauthorized"}
+
+
+@pytest.mark.anyio
+async def test_start_message_acks_existing_running_session(monkeypatch):
+    reset_registry(monkeypatch)
+    session = session_mod.get_or_create_session("alice")
+    session.status = SessionStatus.RUNNING
+    session.session_id = "alice-session"
+
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("running session should be joined, not restarted")
+
+    monkeypatch.setattr(ws_audio_ingest, "_start_server_session", fail_if_called)
+
+    result = await ws_audio_ingest._start_or_join_server_session(
+        session, "alice", "meeting"
+    )
+
+    assert result == {
+        "type": "started",
+        "session_id": "alice-session",
+        "already_running": True,
+    }

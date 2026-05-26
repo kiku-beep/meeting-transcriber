@@ -50,13 +50,14 @@ from backend.api.routes_dictionary import router as dictionary_router
 from backend.api.routes_transcript import router as transcript_router
 from backend.api.routes_config import router as config_router
 from backend.api.routes_summary import router as summary_router
+from backend.api.routes_server import router as server_router
 from backend.api.routes_playback import router as playback_router
 from backend.api.routes_screenshot import router as screenshot_router
 from backend.api.routes_call_detection import router as call_detection_router
 from backend.api.ws_transcription import router as ws_router
 from backend.api.ws_audio_ingest import router as audio_ingest_router
 from backend.config import settings
-from backend.models.session import get_session, list_active_sessions
+from backend.models.session import get_session
 from backend.services.call_detector import get_call_detector
 
 logging.basicConfig(
@@ -195,11 +196,6 @@ if settings.auth_token:
     app.add_middleware(AuthMiddleware)
 
 
-# Server mode: add endpoint to list active sessions
-@app.get("/api/server/sessions")
-async def server_sessions():
-    return {"sessions": list_active_sessions()}
-
 app.include_router(health_router)
 app.include_router(audio_router)
 app.include_router(session_router)
@@ -207,6 +203,7 @@ app.include_router(speaker_router)
 app.include_router(dictionary_router)
 app.include_router(transcript_router)
 app.include_router(summary_router)
+app.include_router(server_router)
 app.include_router(config_router)
 app.include_router(playback_router)
 app.include_router(screenshot_router)

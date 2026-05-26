@@ -1,9 +1,9 @@
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from backend.core.transcriber import AVAILABLE_MODELS, VRAM_REQUIREMENTS, warm_disk_cache
-from backend.models.session import get_session
+from backend.models.session import TranscriptionSession, get_or_create_session, get_session
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +46,17 @@ class ModelWarmCacheRequest(BaseModel):
     model_size: str
 
 
+def get_client_session(client_id: str = Query("default")) -> TranscriptionSession:
+    if client_id and client_id != "default":
+        return get_or_create_session(client_id)
+    return get_session()
+
+
 @router.post("/start")
-async def start_session(req: StartRequest = StartRequest()):
-    session = get_session()
+async def start_session(
+    req: StartRequest = StartRequest(),
+    session: TranscriptionSession = Depends(get_client_session),
+):
     try:
         await session.start(
             device_index=req.device_index,
@@ -63,35 +71,30 @@ async def start_session(req: StartRequest = StartRequest()):
 
 
 @router.post("/stop")
-async def stop_session():
-    session = get_session()
+async def stop_session(session: TranscriptionSession = Depends(get_client_session)):
     await session.stop()
     return session.info
 
 
 @router.post("/discard")
-async def discard_session():
-    session = get_session()
+async def discard_session(session: TranscriptionSession = Depends(get_client_session)):
     await session.discard()
     return session.info
 
 
 @router.post("/pause")
-async def pause_session():
-    session = get_session()
+async def pause_session(session: TranscriptionSession = Depends(get_client_session)):
     await session.pause()
     return session.info
 
 
 @router.get("/status")
-async def session_status():
-    session = get_session()
+async def session_status(session: TranscriptionSession = Depends(get_client_session)):
     return session.info
 
 
 @router.get("/model")
-async def get_model():
-    session = get_session()
+async def get_model(session: TranscriptionSession = Depends(get_client_session)):
     return {
         "current_model": session._transcriber.model_size,
         "is_loaded": session._transcriber.is_loaded,
@@ -102,11 +105,13 @@ async def get_model():
 
 
 @router.post("/model")
-async def switch_model(req: ModelSwitchRequest):
+async def switch_model(
+    req: ModelSwitchRequest,
+    session: TranscriptionSession = Depends(get_client_session),
+):
     if req.model_size not in AVAILABLE_MODELS:
         raise HTTPException(400, f"Invalid model: {req.model_size}. Available: {AVAILABLE_MODELS}")
 
-    session = get_session()
     if session.status.value != "idle":
         raise HTTPException(409, "セッション中はモデルを変更できません")
 
@@ -120,12 +125,14 @@ async def switch_model(req: ModelSwitchRequest):
 
 
 @router.post("/model/warm-cache")
-async def warm_model_cache(req: ModelWarmCacheRequest):
+async def warm_model_cache(
+    req: ModelWarmCacheRequest,
+    session: TranscriptionSession = Depends(get_client_session),
+):
     """Pre-read model files into OS page cache for faster switching."""
     if req.model_size not in AVAILABLE_MODELS:
         raise HTTPException(400, f"Invalid model: {req.model_size}")
 
-    session = get_session()
     # Don't warm the currently loaded model
     if req.model_size == session._transcriber.model_size and session._transcriber.is_loaded:
         return {"status": "already_loaded", "bytes_read": 0, "elapsed_s": 0.0}
@@ -135,9 +142,8 @@ async def warm_model_cache(req: ModelWarmCacheRequest):
 
 
 @router.get("/model/loading-status")
-async def get_loading_status():
+async def get_loading_status(session: TranscriptionSession = Depends(get_client_session)):
     """Get current model loading stage for progress display."""
-    session = get_session()
     return {
         "stage": session._transcriber._loading_stage,
         "progress": session._transcriber._loading_progress,
@@ -145,16 +151,17 @@ async def get_loading_status():
 
 
 @router.get("/entries")
-async def get_entries():
-    session = get_session()
+async def get_entries(session: TranscriptionSession = Depends(get_client_session)):
     return {"entries": [e.model_dump() for e in session.entries]}
 
 
 @router.post("/register-speaker")
-async def register_speaker_from_entry(req: RegisterSpeakerRequest):
+async def register_speaker_from_entry(
+    req: RegisterSpeakerRequest,
+    session: TranscriptionSession = Depends(get_client_session),
+):
     if not req.name.strip():
         raise HTTPException(400, "名前を入力してください")
-    session = get_session()
     try:
         result = session.register_speaker_from_entry(req.entry_index, req.name)
         return {
@@ -167,12 +174,14 @@ async def register_speaker_from_entry(req: RegisterSpeakerRequest):
 
 
 @router.post("/name-cluster")
-async def name_cluster(req: NameClusterRequest):
+async def name_cluster(
+    req: NameClusterRequest,
+    session: TranscriptionSession = Depends(get_client_session),
+):
     """Name a speaker cluster and promote it to a registered speaker."""
     if not req.name.strip():
         raise HTTPException(400, "名前を入力してください")
 
-    session = get_session()
     embedding = session._cluster_manager.get_cluster_embedding(req.cluster_id)
     if embedding is None:
         raise HTTPException(404, f"Cluster {req.cluster_id} not found")
@@ -228,11 +237,13 @@ async def name_cluster(req: NameClusterRequest):
 
 
 @router.post("/expected-speakers")
-async def set_expected_speakers(req: ExpectedSpeakersRequest):
+async def set_expected_speakers(
+    req: ExpectedSpeakersRequest,
+    session: TranscriptionSession = Depends(get_client_session),
+):
     """Set expected participant names before starting a session."""
     from backend.storage.speaker_store import get_speaker_store
 
-    session = get_session()
     names = [n.strip() for n in req.names if n.strip()]
 
     # Load seed embeddings from registered speakers
@@ -249,9 +260,10 @@ async def set_expected_speakers(req: ExpectedSpeakersRequest):
 
 
 @router.get("/expected-speakers")
-async def get_expected_speakers():
+async def get_expected_speakers(
+    session: TranscriptionSession = Depends(get_client_session),
+):
     """Get currently set expected participant names."""
-    session = get_session()
     return {"expected_speakers": session._cluster_manager._expected_speakers}
 
 
@@ -268,13 +280,15 @@ class BulkUpdateSpeakerRequest(BaseModel):
 
 
 @router.patch("/entries/bulk-update-speaker")
-async def bulk_update_speaker(req: BulkUpdateSpeakerRequest):
+async def bulk_update_speaker(
+    req: BulkUpdateSpeakerRequest,
+    session: TranscriptionSession = Depends(get_client_session),
+):
     """Update all entries with old_speaker_id to new speaker."""
     import io
     from backend.storage.correction_store import get_correction_store
     from backend.storage.speaker_store import get_speaker_store as _get_store
 
-    session = get_session()
     correction_store = get_correction_store()
     store = _get_store()
     updated_count = 0
@@ -364,11 +378,13 @@ async def bulk_update_speaker(req: BulkUpdateSpeakerRequest):
 
 
 @router.post("/confirm-suggestion")
-async def confirm_suggestion(req: ConfirmSuggestionRequest):
+async def confirm_suggestion(
+    req: ConfirmSuggestionRequest,
+    session: TranscriptionSession = Depends(get_client_session),
+):
     """Confirm a speaker suggestion: assign cluster entries to registered speaker and learn threshold."""
     from backend.storage.speaker_store import get_speaker_store as _get_store
 
-    session = get_session()
     store = _get_store()
     updated_count = 0
     min_confidence = 1.0
@@ -409,11 +425,14 @@ async def confirm_suggestion(req: ConfirmSuggestionRequest):
 
 
 @router.patch("/entries/{entry_id}")
-async def edit_entry(entry_id: str, req: EntryEditRequest):
+async def edit_entry(
+    entry_id: str,
+    req: EntryEditRequest,
+    session: TranscriptionSession = Depends(get_client_session),
+):
     """Edit a transcript entry in the current live session."""
     from backend.storage.correction_store import get_correction_store
 
-    session = get_session()
     for entry in session.entries:
         if entry.id == entry_id:
             correction_store = get_correction_store()
@@ -461,9 +480,11 @@ async def edit_entry(entry_id: str, req: EntryEditRequest):
 
 
 @router.delete("/entries/{entry_id}")
-async def delete_entry(entry_id: str):
+async def delete_entry(
+    entry_id: str,
+    session: TranscriptionSession = Depends(get_client_session),
+):
     """Delete a transcript entry from the current live session."""
-    session = get_session()
     for entry in session.entries:
         if entry.id == entry_id:
             session.entries.remove(entry)
@@ -479,12 +500,14 @@ class RegisterNewSpeakerRequest(BaseModel):
 
 
 @router.post("/register-new-speaker")
-async def register_new_speaker(req: RegisterNewSpeakerRequest):
+async def register_new_speaker(
+    req: RegisterNewSpeakerRequest,
+    session: TranscriptionSession = Depends(get_client_session),
+):
     """Register a new speaker and assign to a specific entry."""
     if not req.name.strip():
         raise HTTPException(400, "名前を入力してください")
 
-    session = get_session()
     target = None
     for entry in session.entries:
         if entry.id == req.entry_id:

@@ -34,6 +34,15 @@ from backend.models.schemas import SessionStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_start_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_start_lock(client_id: str) -> asyncio.Lock:
+    lock = _start_locks.get(client_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _start_locks[client_id] = lock
+    return lock
 
 
 @router.websocket("/ws/audio/{client_id}")
@@ -44,15 +53,17 @@ async def ws_audio_ingest(ws: WebSocket, client_id: str, source: str = Query("mi
         client_id: Unique client identifier
         source: "mic" or "loopback" — which buffer to feed
     """
+    await ws.accept()
+
     # Auth check
     if settings.auth_token:
         # Check token from query param or first message
         token = ws.query_params.get("token", "")
         if token != settings.auth_token:
+            await ws.send_json({"type": "error", "detail": "Unauthorized"})
             await ws.close(code=4001, reason="Unauthorized")
             return
 
-    await ws.accept()
     logger.info("Audio ingest connected: client=%s source=%s", client_id, source)
 
     session = get_or_create_session(client_id)
@@ -93,15 +104,10 @@ async def ws_audio_ingest(ws: WebSocket, client_id: str, source: str = Query("mi
 
                 if msg_type == "start":
                     session_name = msg.get("session_name", "")
-                    if session.status == SessionStatus.IDLE:
-                        # Start session in server mode (no local audio)
-                        try:
-                            ensure_session_capacity(client_id)
-                        except RuntimeError as e:
-                            await ws.send_json({"type": "error", "detail": str(e)})
-                            continue
-                        await _start_server_session(session, client_id, session_name)
-                        await ws.send_json({"type": "started", "session_id": session.session_id})
+                    result = await _start_or_join_server_session(
+                        session, client_id, session_name
+                    )
+                    await ws.send_json(result)
 
                 elif msg_type == "stop":
                     if session.status in (SessionStatus.RUNNING, SessionStatus.PAUSED):
@@ -117,6 +123,37 @@ async def ws_audio_ingest(ws: WebSocket, client_id: str, source: str = Query("mi
         logger.exception("Audio ingest error for client %s", client_id)
     finally:
         logger.info("Audio ingest disconnected: client=%s source=%s", client_id, source)
+
+
+async def _start_or_join_server_session(
+    session, client_id: str, session_name: str
+) -> dict:
+    """Start a client session once, or acknowledge additional source streams.
+
+    Mac/Windows sidecars may open mic and loopback WebSockets. Both can send a
+    start message, so the second stream must receive an ack instead of waiting
+    forever.
+    """
+    async with _get_start_lock(client_id):
+        if session.status == SessionStatus.IDLE:
+            try:
+                ensure_session_capacity(client_id)
+            except RuntimeError as e:
+                return {"type": "error", "detail": str(e)}
+            await _start_server_session(session, client_id, session_name)
+            return {"type": "started", "session_id": session.session_id}
+
+        if session.status in (SessionStatus.STARTING, SessionStatus.RUNNING, SessionStatus.PAUSED):
+            return {
+                "type": "started",
+                "session_id": session.session_id,
+                "already_running": True,
+            }
+
+        return {
+            "type": "error",
+            "detail": f"Session is {session.status.value}; wait before starting again",
+        }
 
 
 async def _start_server_session(
