@@ -147,6 +147,65 @@ def create_app() -> FastAPI:
     async def speakers() -> dict[str, Any]:
         return {"speakers": []}
 
+    @app.get("/api/config/status")
+    async def config_status() -> dict[str, Any]:
+        return {
+            "gemini_api_key_set": False,
+            "gemini_api_key_masked": None,
+            "text_refine_enabled": False,
+        }
+
+    @app.get("/api/config/meeting")
+    async def meeting_config() -> dict[str, Any]:
+        return {
+            "call_notification_enabled": True,
+            "screenshot_enabled": False,
+            "audio_saving_enabled": False,
+        }
+
+    @app.get("/api/config/screenshots")
+    async def screenshots_config() -> dict[str, Any]:
+        return {
+            "screenshot_enabled": False,
+            "screenshot_interval": 10,
+            "screenshot_quality": 80,
+        }
+
+    @app.get("/api/session/model")
+    async def model_status() -> dict[str, Any]:
+        return {
+            "current_model": "mock",
+            "is_loaded": True,
+            "available_models": [
+                {"name": "mock", "vram_mb": 0},
+                {"name": "kotoba-v2.0", "vram_mb": 2500},
+            ],
+        }
+
+    @app.get("/api/session/model/loading-status")
+    async def model_loading_status() -> dict[str, Any]:
+        return {"stage": "ready", "progress": 1.0}
+
+    @app.get("/api/summary/models")
+    async def summary_models() -> dict[str, Any]:
+        return {
+            "current_model": "mock",
+            "models": [
+                {
+                    "id": "mock",
+                    "label": "Mock Summary",
+                    "input_price": 0,
+                    "output_price": 0,
+                    "speed": "very_fast",
+                    "accuracy": "low",
+                }
+            ],
+        }
+
+    @app.get("/api/call-detection/pending")
+    async def pending_calls() -> dict[str, Any]:
+        return {"calls": []}
+
     @app.get("/api/session/status")
     async def session_status(client_id: str = Query("default")) -> dict[str, Any]:
         return _session_info(state.session(client_id))

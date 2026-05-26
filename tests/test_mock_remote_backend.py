@@ -54,3 +54,24 @@ def test_mock_backend_rest_start_broadcasts_for_localhost_smoke_test():
     assert response.json()["session_name"] == "localhost-smoke"
     assert status["data"]["status"] == "running"
     assert entry["type"] == "entry"
+
+
+def test_mock_backend_supports_settings_screen_read_endpoints():
+    client = TestClient(create_app())
+
+    expected_ok_paths = [
+        "/api/health/gpu",
+        "/api/audio/devices",
+        "/api/speakers",
+        "/api/config/status",
+        "/api/config/meeting",
+        "/api/config/screenshots",
+        "/api/session/model",
+        "/api/session/model/loading-status",
+        "/api/summary/models",
+        "/api/call-detection/pending",
+    ]
+
+    for path in expected_ok_paths:
+        response = client.get(path)
+        assert response.status_code == 200, path

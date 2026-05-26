@@ -73,3 +73,6 @@
 - Added `scripts/mock_remote_backend.py` so the Mac client can test remote URL setup, audio WebSocket start, and transcript WebSocket rendering before the company PC is configured.
 - Added mock backend tests covering `/api/health`, `/ws/audio/{client_id}`, `/ws/transcript`, and REST `/api/session/start` for localhost smoke checks.
 - Documented that audio-sidecar testing must use a non-localhost URL, even when the mock backend runs on the same Mac, because localhost is treated as local standalone mode by the Tauri app.
+- Fixed the Tauri frontend so browser/Vite verification does not call `set_recording_icon` outside the native Tauri runtime.
+- Extended the mock backend with settings/model/summary/call-detection read endpoints so the app can use the mock without noisy `Not Found` errors.
+- Verified the Vite UI against the mock backend: connection health passed, `録音開始` created a fake transcript row, and the settings screen rendered without `Not Found`.
