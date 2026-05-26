@@ -174,6 +174,31 @@ npm run tauri dev
 macOSでPC音声も送る場合は、BlackHole または Soundflower のような仮想ループバック入力が必要です。
 未設定でもマイク音声のみで録音開始できます。
 
+#### 会社PCセットアップ前のMac単体通信テスト
+
+会社PCのGPUバックエンドを触る前に、軽量mockバックエンドでMacクライアントの接続・音声送信・文字表示だけを確認できます。
+このmockはASR/GPU処理を行わず、音声WebSocketの開始を受けたら固定のテスト文字列を返します。
+
+```bash
+# リポジトリ直下
+python -m venv .mock-venv
+source .mock-venv/bin/activate
+pip install fastapi uvicorn
+python scripts/mock_remote_backend.py --host 0.0.0.0 --port 8000
+```
+
+Tauriアプリ側のバックエンドURLには `http://<MacのIPアドレス>:8000` を指定してください。
+同じMac上のmockに接続する場合でも、音声sidecar経路を試すには `127.0.0.1` / `localhost` ではなく、Wi-Fiや有線LANのIPを使います。
+
+```bash
+# macOSでWi-FiのIPを確認する例
+ipconfig getifaddr en0
+```
+
+録音開始後、文字起こし画面に `mock backend received mic audio stream` が表示されれば、フロントエンドからバックエンドへのWebSocket送信と、バックエンドからフロントエンドへの文字起こし配信は通っています。
+
+> `127.0.0.1` / `localhost` を指定するとアプリはローカル一体型として扱うため、REST経由の簡易UI確認になります。音声sidecarの送信経路まで確認する場合は非localhost URLを使ってください。
+
 ## Whisperモデル一覧
 
 | モデル | VRAM | 特徴 |

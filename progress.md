@@ -70,3 +70,6 @@
 - The diagnostic checks Git, Python, Tailscale, NVIDIA GPU, CUDA/PyTorch, required Python modules, `%APPDATA%\transcriber\.env`, port 8000, and backend health endpoints.
 - Added static and PowerShell parse tests for the diagnostic script.
 - Ran the diagnostic locally with `-SkipHealth`; it correctly reported missing Tailscale/GPU on this non-server environment and showed suggested startup command.
+- Added `scripts/mock_remote_backend.py` so the Mac client can test remote URL setup, audio WebSocket start, and transcript WebSocket rendering before the company PC is configured.
+- Added mock backend tests covering `/api/health`, `/ws/audio/{client_id}`, `/ws/transcript`, and REST `/api/session/start` for localhost smoke checks.
+- Documented that audio-sidecar testing must use a non-localhost URL, even when the mock backend runs on the same Mac, because localhost is treated as local standalone mode by the Tauri app.
