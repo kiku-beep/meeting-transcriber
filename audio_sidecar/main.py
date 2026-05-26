@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import queue
 import signal
 import sys
 import threading
@@ -197,10 +198,11 @@ def connect_audio_ws(ws_url: str, client_id: str, source: str, token: str = ""):
     import websocket
 
     url = build_audio_ws_url(ws_url, client_id, source, token)
+    origin = f"http://{ws_url.split('//')[1].split('/')[0]}"
     return websocket.create_connection(
         url,
         timeout=10,
-        header={"Origin": f"http://{ws_url.split('//')[1].split('/')[0]}"},
+        origin=origin,
     )
 
 
@@ -360,9 +362,11 @@ def stream_audio_portaudio(
         )
 
         cb_count = 0
+        dropped_count = 0
+        send_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
 
         def callback(indata, frames, time_info, status):
-            nonlocal cb_count
+            nonlocal cb_count, dropped_count
             if status:
                 logger.warning("%s stream status: %s", source, status)
             if _stop.is_set():
@@ -376,11 +380,11 @@ def stream_audio_portaudio(
                 logger.info("%s cb #%d: len=%d, amp=%.4f", source, cb_count, len(audio), amp)
 
             try:
-                ws.send_binary(audio_to_pcm16_bytes(audio))
-            except Exception:
-                logger.warning("Failed to send %s audio", source)
-                _stop.set()
-                raise sd.CallbackStop()
+                send_queue.put_nowait(audio_to_pcm16_bytes(audio))
+            except queue.Full:
+                dropped_count += 1
+                if dropped_count == 1 or dropped_count % 100 == 0:
+                    logger.warning("%s send queue full; dropped=%d", source, dropped_count)
 
         with sd.InputStream(
             device=device_index,
@@ -392,7 +396,15 @@ def stream_audio_portaudio(
         ):
             logger.info("%s stream started", source)
             while not _stop.is_set():
-                _stop.wait(timeout=0.5)
+                try:
+                    pcm_bytes = send_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                try:
+                    ws.send_binary(pcm_bytes)
+                except Exception:
+                    logger.warning("Failed to send %s audio", source)
+                    _stop.set()
 
         send_stop_if_needed(ws, source)
 
