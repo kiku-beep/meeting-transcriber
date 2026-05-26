@@ -79,3 +79,24 @@ async def test_start_message_acks_existing_running_session(monkeypatch):
         "session_id": "alice-session",
         "already_running": True,
     }
+
+
+@pytest.mark.anyio
+async def test_mic_disconnect_stops_running_server_session():
+    class FakeSession:
+        status = SessionStatus.RUNNING
+        session_id = "alice-session"
+
+        def __init__(self):
+            self.stop_calls = 0
+
+        async def stop(self):
+            self.stop_calls += 1
+            self.status = SessionStatus.IDLE
+
+    session = FakeSession()
+
+    await ws_audio_ingest._stop_session_on_source_disconnect(session, "alice", "mic")
+
+    assert session.stop_calls == 1
+    assert session.status == SessionStatus.IDLE

@@ -122,7 +122,22 @@ async def ws_audio_ingest(ws: WebSocket, client_id: str, source: str = Query("mi
     except Exception:
         logger.exception("Audio ingest error for client %s", client_id)
     finally:
+        await _stop_session_on_source_disconnect(session, client_id, source)
         logger.info("Audio ingest disconnected: client=%s source=%s", client_id, source)
+
+
+async def _stop_session_on_source_disconnect(session, client_id: str, source: str) -> None:
+    if source != "mic":
+        return
+    if session.status not in (SessionStatus.RUNNING, SessionStatus.PAUSED):
+        return
+
+    logger.warning(
+        "Mic audio ingest disconnected while session is active; stopping session: client=%s session=%s",
+        client_id,
+        session.session_id,
+    )
+    await session.stop()
 
 
 async def _start_or_join_server_session(

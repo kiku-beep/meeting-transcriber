@@ -206,6 +206,36 @@ def connect_audio_ws(ws_url: str, client_id: str, source: str, token: str = ""):
     )
 
 
+def start_ws_reader(ws, source: str):
+    """Drain incoming WebSocket frames so websocket-client can answer pings."""
+    try:
+        import websocket as websocket_lib
+        timeout_errors = (websocket_lib.WebSocketTimeoutException,)
+    except Exception:
+        timeout_errors = (TimeoutError,)
+
+    def reader():
+        while not _stop.is_set():
+            try:
+                message = ws.recv()
+                if message:
+                    logger.debug("%s WS received: %s", source, message)
+            except timeout_errors:
+                continue
+            except Exception:
+                if not _stop.is_set():
+                    logger.debug("%s WS reader stopped", source, exc_info=True)
+                break
+
+    thread = threading.Thread(
+        target=reader,
+        name=f"{source}-ws-reader",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
 def send_start_if_needed(ws, source: str, session_name: str = ""):
     if source != "mic":
         return
@@ -229,7 +259,6 @@ def send_stop_if_needed(ws, source: str):
         return
     try:
         ws.send(json.dumps({"type": "stop"}))
-        ws.recv()
     except Exception:
         logger.debug("Failed to send stop control message", exc_info=True)
 
@@ -254,6 +283,7 @@ def stream_audio_windows(
         logger.info("WebSocket connected for %s", source)
 
         send_start_if_needed(ws, source, session_name)
+        start_ws_reader(ws, source)
 
         p = pyaudio.PyAudio()
         dev_info = p.get_device_info_by_index(device_index)
@@ -348,6 +378,7 @@ def stream_audio_portaudio(
         logger.info("WebSocket connected for %s", source)
 
         send_start_if_needed(ws, source, session_name)
+        start_ws_reader(ws, source)
 
         dev_info = sd.query_devices(device_index, "input")
         sample_rate = int(dev_info["default_samplerate"])
