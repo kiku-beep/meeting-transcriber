@@ -33,3 +33,25 @@ def test_active_session_limit_blocks_new_recordings(monkeypatch):
         session_mod.ensure_session_capacity("bob")
 
     session_mod.ensure_session_capacity("alice")
+
+
+def test_empty_idle_client_sessions_can_be_cleaned_without_completed_sessions(monkeypatch):
+    reset_registry(monkeypatch)
+
+    empty = session_mod.get_or_create_session("empty-client")
+    empty.status = SessionStatus.IDLE
+
+    completed = session_mod.get_or_create_session("completed-client")
+    completed.status = SessionStatus.IDLE
+    completed.session_id = "completed-session"
+
+    running = session_mod.get_or_create_session("running-client")
+    running.status = SessionStatus.RUNNING
+
+    removed = session_mod.cleanup_empty_idle_client_sessions()
+
+    assert removed == ["empty-client"]
+    assert "empty-client" not in session_mod._sessions
+    assert "completed-client" in session_mod._sessions
+    assert "running-client" in session_mod._sessions
+    assert session_mod.empty_idle_client_session_count() == 0

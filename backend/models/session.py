@@ -994,7 +994,7 @@ def get_or_create_session(client_id: str) -> TranscriptionSession:
     """
     if client_id not in _sessions:
         _sessions[client_id] = TranscriptionSession()
-        logger.info("Created session for client %s (%d active)", client_id, len(_sessions))
+        logger.info("Created session for client %s (%d total)", client_id, len(_sessions))
     return _sessions[client_id]
 
 
@@ -1010,6 +1010,28 @@ def active_session_count() -> int:
         1
         for cid, session in _sessions.items()
         if cid != "default" and session.status in active_statuses
+    )
+
+
+def client_session_count() -> int:
+    """Count non-default client sessions currently held in memory."""
+    return sum(1 for cid in _sessions if cid != "default")
+
+
+def _is_empty_idle_client_session(session: TranscriptionSession) -> bool:
+    return (
+        session.status == SessionStatus.IDLE
+        and not session.session_id
+        and not session.entries
+    )
+
+
+def empty_idle_client_session_count() -> int:
+    """Count idle client sessions that have never started recording."""
+    return sum(
+        1
+        for cid, session in _sessions.items()
+        if cid != "default" and _is_empty_idle_client_session(session)
     )
 
 
@@ -1034,6 +1056,27 @@ def remove_session(client_id: str) -> None:
     if client_id in _sessions and client_id != "default":
         del _sessions[client_id]
         logger.info("Removed session for client %s (%d remaining)", client_id, len(_sessions))
+
+
+def remove_empty_idle_client_session(client_id: str) -> bool:
+    """Remove a client session only if it never started and has no entries."""
+    if client_id == "default":
+        return False
+    session = _sessions.get(client_id)
+    if session is None or not _is_empty_idle_client_session(session):
+        return False
+    del _sessions[client_id]
+    logger.info("Removed empty idle session for client %s (%d remaining)", client_id, len(_sessions))
+    return True
+
+
+def cleanup_empty_idle_client_sessions() -> list[str]:
+    """Remove all empty idle client sessions and return removed client IDs."""
+    removed = []
+    for client_id in list(_sessions.keys()):
+        if remove_empty_idle_client_session(client_id):
+            removed.append(client_id)
+    return removed
 
 
 def list_active_sessions() -> list[dict]:

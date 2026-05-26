@@ -39,3 +39,21 @@ def test_server_diagnostics_exposes_remote_backend_state(monkeypatch):
     assert data["transcript_ws_path"] == "/ws/transcript"
     assert data["active_session_count"] == 1
     assert data["max_concurrent_sessions"] == 2
+    assert data["client_session_count"] == 1
+    assert data["empty_idle_session_count"] == 0
+
+
+def test_cleanup_empty_idle_sessions_endpoint(monkeypatch):
+    reset_registry(monkeypatch)
+
+    session_mod.get_or_create_session("empty-client")
+    completed = session_mod.get_or_create_session("completed-client")
+    completed.session_id = "completed-session"
+
+    client = TestClient(make_app())
+    response = client.post("/api/server/cleanup-empty-idle-sessions")
+
+    assert response.status_code == 200
+    assert response.json() == {"removed": ["empty-client"], "removed_count": 1}
+    assert "empty-client" not in session_mod._sessions
+    assert "completed-client" in session_mod._sessions

@@ -10,7 +10,11 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from starlette.websockets import WebSocketState
 
-from backend.models.session import get_session, get_or_create_session
+from backend.models.session import (
+    get_session,
+    get_or_create_session,
+    remove_empty_idle_client_session,
+)
 from backend.config import settings
 
 logger = logging.getLogger(__name__)
@@ -134,4 +138,6 @@ async def ws_transcript(ws: WebSocket, client_id: str = Query("default")):
     finally:
         reader_task.cancel()
         _clients.discard(ws)
+        if settings.deployment_mode == "server" and client_id != "default":
+            remove_empty_idle_client_session(client_id)
         logger.info("WebSocket client disconnected (%d remaining)", len(_clients))
