@@ -183,7 +183,7 @@ macOSでPC音声も送る場合は、BlackHole または Soundflower のよう�
 # リポジトリ直下
 python -m venv .mock-venv
 source .mock-venv/bin/activate
-pip install fastapi uvicorn
+pip install fastapi "uvicorn[standard]"
 python scripts/mock_remote_backend.py --host 0.0.0.0 --port 8000
 ```
 
