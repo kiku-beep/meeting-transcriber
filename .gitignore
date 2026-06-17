@@ -20,6 +20,7 @@ env/
 
 # Environment
 .env
+tauri-app/.env.local
 
 # Runtime data
 data/speakers/

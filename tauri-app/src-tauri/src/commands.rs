@@ -1,4 +1,7 @@
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
+
+#[cfg(windows)]
+use tauri::Manager;
 
 use crate::audio_sidecar::AudioSidecarManager;
 use crate::sidecar::SidecarManager;

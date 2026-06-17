@@ -28,14 +28,15 @@ _SYSTEM_PROMPT = """あなたは建材メーカー（モノクローム株式会
 
 
 class TextRefiner:
-    """Background task that refines transcript entries via Gemini API."""
+    """Refines transcript entries via Gemini API after recording stops."""
 
     def __init__(self, settings: Settings, dictionary_store: DictionaryStore):
-        self.enabled = settings.text_refine_enabled and bool(settings.gemini_api_key)
-        self.batch_size = settings.text_refine_batch_size
-        self.delay_s = settings.text_refine_delay_s
-        self.api_key = settings.gemini_api_key
-        self.model = settings.text_refine_model
+        self._settings = settings
+        self.enabled = False
+        self.batch_size = 0
+        self.delay_s = 0.0
+        self.api_key = ""
+        self.model = ""
         self._dictionary_store = dictionary_store
         self._dict_prompt: str = ""
         self._task: asyncio.Task | None = None
@@ -45,24 +46,42 @@ class TextRefiner:
         self._consecutive_failures: int = 0
         self._backoff_s: float = 0.0
 
+        self._refresh_config()
+
+    def _refresh_config(self) -> None:
+        """Refresh runtime settings so UI changes apply to the next session."""
+        self.enabled = (
+            self._settings.text_refine_enabled
+            and bool(self._settings.gemini_api_key)
+        )
+        self.batch_size = self._settings.text_refine_batch_size
+        self.delay_s = self._settings.text_refine_delay_s
+        self.api_key = self._settings.gemini_api_key
+        self.model = self._settings.text_refine_model
+
         if not self.enabled:
-            if not settings.gemini_api_key:
+            if not self._settings.gemini_api_key:
                 logger.warning("TextRefiner disabled: GEMINI_API_KEY not set")
             else:
                 logger.info("TextRefiner disabled by config")
 
     def start(self, entries: list[TranscriptEntry]) -> None:
-        """Start the background refinement loop."""
-        if not self.enabled:
-            return
+        """Register session entries for final-pass refinement."""
+        self._refresh_config()
         self._entries = entries
         self._last_refined_index = 0
+        if not self.enabled:
+            return
         self._dict_prompt = self._build_dictionary_prompt()
-        self._task = asyncio.create_task(self._run_loop())
-        logger.info("TextRefiner started (model=%s, batch=%d)", self.model, self.batch_size)
+        self._task = None
+        logger.info(
+            "TextRefiner armed for final pass (model=%s, batch=%d)",
+            self.model,
+            self.batch_size,
+        )
 
-    async def stop(self) -> None:
-        """Stop the refinement loop."""
+    async def stop(self, refine_pending: bool = True) -> None:
+        """Stop refinement and optionally process all pending entries."""
         if self._task and not self._task.done():
             self._task.cancel()
             try:
@@ -70,7 +89,31 @@ class TextRefiner:
             except asyncio.CancelledError:
                 pass
         self._task = None
+        if refine_pending:
+            await self.refine_pending()
         logger.info("TextRefiner stopped")
+
+    async def refine_pending(self) -> None:
+        """Run final-pass refinement for all entries not processed yet."""
+        self._refresh_config()
+        if not self.enabled:
+            return
+
+        while self._last_refined_index < len(self._entries):
+            batch = self._collect_batch()
+            if not batch:
+                return
+
+            if self._backoff_s > 0:
+                await asyncio.sleep(self._backoff_s)
+
+            refined = await self._refine_batch(batch)
+            if refined is None:
+                return
+
+            self._apply_refinements(batch, refined)
+            self._consecutive_failures = 0
+            self._backoff_s = 0.0
 
     def _build_dictionary_prompt(self) -> str:
         """Build dictionary section for the prompt from dictionary_store."""
@@ -163,6 +206,7 @@ class TextRefiner:
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "temperature": 0.1,
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
 

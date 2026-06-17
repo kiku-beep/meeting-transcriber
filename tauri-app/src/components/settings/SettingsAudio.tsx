@@ -1,13 +1,21 @@
 import type { AudioDevice } from "../../lib/types";
+import { isRemoteMode } from "../../lib/audioSidecar";
 
 interface Props {
   devices: AudioDevice[];
 }
 
 export default function SettingsAudio({ devices }: Props) {
+  const remoteMode = isRemoteMode();
+
   return (
     <section className="space-y-2">
       <h3 className="text-sm font-medium text-slate-300">オーディオデバイス</h3>
+      {remoteMode && (
+        <p className="text-xs text-slate-500">
+          リモート構成ではMac側のマイクを自動検出して送信します。PC音声も送る場合はBlackHoleまたはSoundflowerを入力デバイスとして認識できる状態にしてください。
+        </p>
+      )}
       <div className="space-y-1">
         {devices.map((d) => (
           <div key={d.index} className="flex items-center gap-2 text-sm py-1">

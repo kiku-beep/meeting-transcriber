@@ -1,4 +1,5 @@
-pyaudiowpatch>=0.2.12
+pyaudiowpatch>=0.2.12; platform_system == "Windows"
+sounddevice>=0.4.7; platform_system != "Windows"
 numpy>=1.24
 scipy>=1.10
 websocket-client>=1.6

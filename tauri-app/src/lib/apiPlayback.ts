@@ -1,6 +1,5 @@
 import { apiFetch } from "./api";
-import { BASE_URL } from "./api";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { getAuthToken, getBaseUrl, httpFetch } from "./api";
 
 export interface AudioInfo {
   has_audio: boolean;
@@ -10,12 +9,15 @@ export interface AudioInfo {
 }
 
 export function getAudioUrl(sessionId: string): string {
-  return `${BASE_URL}/api/playback/${sessionId}/audio`;
+  return `${getBaseUrl()}/api/playback/${sessionId}/audio`;
 }
 
 export async function fetchAudioBlobUrl(sessionId: string): Promise<string> {
-  const url = `${BASE_URL}/api/playback/${sessionId}/audio`;
-  const res = await tauriFetch(url);
+  const url = `${getBaseUrl()}/api/playback/${sessionId}/audio`;
+  const token = getAuthToken();
+  const res = await httpFetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
   if (!res.ok) throw new Error(`Audio fetch failed: HTTP ${res.status}`);
   const arrayBuffer = await res.arrayBuffer();
   const contentType = res.headers.get("content-type") || "audio/ogg";

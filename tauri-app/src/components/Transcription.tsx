@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useWebSocket } from "../lib/useWebSocket";
+import { isTauriRuntime } from "../lib/api";
 import { startSession, stopSession, pauseSession, discardSession, nameCluster, registerNewSpeaker, setExpectedSpeakers, editSessionEntry, bulkUpdateSpeaker, confirmSuggestion, getSessionEntries, deleteSessionEntry } from "../lib/apiSession";
 import { getSpeakers } from "../lib/apiSpeakers";
 import { isRemoteMode, startAudioSidecar, stopAudioSidecar } from "../lib/audioSidecar";
@@ -96,6 +97,7 @@ export default function Transcription({ onSessionStop }: Props) {
 
   // Update taskbar icon when recording starts/stops
   useEffect(() => {
+    if (!isTauriRuntime()) return;
     invoke("set_recording_icon", { recording: status?.status === "running" });
   }, [status?.status]);
 
@@ -171,6 +173,10 @@ export default function Transcription({ onSessionStop }: Props) {
   }, [sessionName]);
 
   const handlePause = async () => {
+    if (isRemoteMode()) {
+      setError("リモート録音の一時停止は未対応です。停止してから再開してください。");
+      return;
+    }
     try {
       await pauseSession();
     } catch (e) {
@@ -182,8 +188,12 @@ export default function Transcription({ onSessionStop }: Props) {
     setLoading(true);
     try {
       if (isRemoteMode()) {
-        // Stop audio sidecar (which sends "stop" to server)
+        const remoteSessionId = status?.session_id;
         await stopAudioSidecar();
+        if (remoteSessionId) {
+          onSessionStop(remoteSessionId);
+          return;
+        }
       }
       const info = await stopSession();
       onSessionStop(info.session_id);

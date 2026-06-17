@@ -17,7 +17,7 @@ from backend.models.audio_stream import AudioStreamManager
 from backend.models.pipeline import TranscriptionPipeline
 from backend.models.schemas import SessionStatus, TranscriptEntry
 from backend.storage.file_store import save_session
-from backend.core.segmentation_refiner import SegmentationRefiner
+from backend.core.segmentation_refiner import SegmentationRefiner, should_run_segmentation_refinement
 from backend.core.text_refiner import TextRefiner
 from backend.storage.dictionary_store import get_dictionary_store
 from backend.storage.speaker_store import get_speaker_store
@@ -157,7 +157,7 @@ class TranscriptionSession:
                     loop.run_in_executor(None, self._transcriber.load_model),
                     loop.run_in_executor(None, self._diarizer.load_model),
                 ]
-                if settings.segmentation_refine_enabled and not self._refiner.is_loaded:
+                if should_run_segmentation_refinement() and not self._refiner.is_loaded:
                     loads.append(loop.run_in_executor(None, self._refiner.load_model))
                 await asyncio.gather(*loads)
             else:
@@ -192,7 +192,7 @@ class TranscriptionSession:
             self._pipeline_task = asyncio.create_task(self._pipeline.run())
 
             # Start segmentation refinement background task (Pass 2)
-            if settings.segmentation_refine_enabled and self._refiner.is_loaded:
+            if should_run_segmentation_refinement() and self._refiner.is_loaded:
                 self._refiner_task = asyncio.create_task(
                     self._refiner.run(
                         self._stop_event,
@@ -272,7 +272,7 @@ class TranscriptionSession:
                     pass
             self._refiner_task = None
 
-        await self._text_refiner.stop()
+        await self._text_refiner.stop(refine_pending=True)
 
         await self._update_speaker_profiles()
         self._auto_accumulate_samples()
@@ -349,7 +349,7 @@ class TranscriptionSession:
                 pass
             self._refiner_task = None
 
-        await self._text_refiner.stop()
+        await self._text_refiner.stop(refine_pending=False)
 
         # Delete any screenshots already saved for this session
         import shutil
@@ -977,6 +977,7 @@ class TranscriptionSession:
 
 # ── Session Registry (multi-client support) ──────────────────────
 _sessions: dict[str, TranscriptionSession] = {}
+_client_connections: dict[str, int] = {}
 _default_session = TranscriptionSession()
 _sessions["default"] = _default_session
 
@@ -994,7 +995,7 @@ def get_or_create_session(client_id: str) -> TranscriptionSession:
     """
     if client_id not in _sessions:
         _sessions[client_id] = TranscriptionSession()
-        logger.info("Created session for client %s (%d active)", client_id, len(_sessions))
+        logger.info("Created session for client %s (%d total)", client_id, len(_sessions))
     return _sessions[client_id]
 
 
@@ -1010,6 +1011,55 @@ def active_session_count() -> int:
         1
         for cid, session in _sessions.items()
         if cid != "default" and session.status in active_statuses
+    )
+
+
+def client_session_count() -> int:
+    """Count non-default client sessions currently held in memory."""
+    return sum(1 for cid in _sessions if cid != "default")
+
+
+def register_client_connection(client_id: str) -> None:
+    """Track an active remote client connection for cleanup safety."""
+    if client_id == "default":
+        return
+    _client_connections[client_id] = _client_connections.get(client_id, 0) + 1
+
+
+def unregister_client_connection(client_id: str) -> None:
+    """Release a tracked remote client connection."""
+    if client_id == "default":
+        return
+    count = _client_connections.get(client_id, 0) - 1
+    if count > 0:
+        _client_connections[client_id] = count
+    else:
+        _client_connections.pop(client_id, None)
+
+
+def client_connection_count() -> int:
+    """Count client IDs with at least one active remote connection."""
+    return len(_client_connections)
+
+
+def _is_empty_idle_client_session(session: TranscriptionSession) -> bool:
+    return (
+        session.status == SessionStatus.IDLE
+        and not session.session_id
+        and not session.entries
+    )
+
+
+def empty_idle_client_session_count() -> int:
+    """Count idle client sessions that have never started recording."""
+    return sum(
+        1
+        for cid, session in _sessions.items()
+        if (
+            cid != "default"
+            and cid not in _client_connections
+            and _is_empty_idle_client_session(session)
+        )
     )
 
 
@@ -1034,6 +1084,29 @@ def remove_session(client_id: str) -> None:
     if client_id in _sessions and client_id != "default":
         del _sessions[client_id]
         logger.info("Removed session for client %s (%d remaining)", client_id, len(_sessions))
+
+
+def remove_empty_idle_client_session(client_id: str) -> bool:
+    """Remove a client session only if it never started and has no entries."""
+    if client_id == "default":
+        return False
+    if client_id in _client_connections:
+        return False
+    session = _sessions.get(client_id)
+    if session is None or not _is_empty_idle_client_session(session):
+        return False
+    del _sessions[client_id]
+    logger.info("Removed empty idle session for client %s (%d remaining)", client_id, len(_sessions))
+    return True
+
+
+def cleanup_empty_idle_client_sessions() -> list[str]:
+    """Remove all empty idle client sessions and return removed client IDs."""
+    removed = []
+    for client_id in list(_sessions.keys()):
+        if remove_empty_idle_client_session(client_id):
+            removed.append(client_id)
+    return removed
 
 
 def list_active_sessions() -> list[dict]:

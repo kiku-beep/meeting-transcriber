@@ -16,13 +16,13 @@ NVIDIA GPU搭載のWindows PCで動作するリアルタイム会議文字起こ
 
 | 項目 | 要件 |
 |------|------|
-| OS | Windows 10/11（WASAPI必須） |
-| GPU | NVIDIA GPU + CUDA 12.x（RTX 3060以上推奨、VRAM 8GB+） |
+| OS | バックエンド: Windows 10/11 / クライアント: macOS または Windows |
+| GPU | バックエンドのみ NVIDIA GPU + CUDA 12.x（RTX 3060以上推奨、VRAM 8GB+） |
 | Python | 3.10〜3.12 |
 | Node.js | 18以上（Tauriフロントエンド用） |
 | Rust | stable（Tauriビルド用） |
 
-> **注意**: `PyAudioWPatch`（WASAPIループバック）はWindows専用です。Mac/Linuxでは音声キャプチャ部分の書き換えが必要です。
+> **注意**: ローカル構成の音声キャプチャはWindows WASAPI前提です。リモート構成のMacクライアントは `sounddevice` を使い、PC音声の取得にはBlackHole/Soundflower等の仮想ループバック入力が必要です。
 
 ## 構成パターン
 
@@ -123,6 +123,15 @@ npm run tauri dev
 
 #### GPUサーバー側（バックエンド）
 
+まず会社PC上で診断を実行します：
+
+```powershell
+scripts\diagnose_server.ps1
+```
+
+この診断は Git / Python / Tailscale / NVIDIA GPU / CUDA版PyTorch / 主要依存 / `.env` / ポート / ヘルスチェックをまとめて確認します。
+バックエンド起動前に実行する場合やヘルスチェックを飛ばしたい場合は `scripts\diagnose_server.ps1 -SkipHealth` を使います。
+
 ```powershell
 # Tailscale IP にバインドしてサーバー起動
 scripts\start_server.ps1
@@ -147,19 +156,48 @@ GPU不要。Node.js + Rust + Tailscale があれば動作します。
 # 1. Tailscale をインストールし、同じ tailnet にログイン
 # 2. リポジトリをクローン
 git clone https://github.com/kiku-beep/meeting-transcriber.git
-cd meeting-transcriber/tauri-app
-npm install
+cd meeting-transcriber
 
-# 3. 接続先を設定（.env.remote をコピー）
-cp .env.remote .env.local
+# 3. Macクライアントの依存をセットアップ
+scripts/setup_mac_client.sh
 
 # 4. 起動
+cd tauri-app
 npm run tauri dev
 ```
 
 > `.env.remote` にサーバーの Tailscale URL がプリセットされています。
 > 環境変数 `VITE_BACKEND_URL` でバックエンドの接続先を変更できます。
 > 未設定時は `http://127.0.0.1:8000`（ローカル）に接続します。
+> アプリ起動後の接続画面または設定画面から、別PCバックエンドのURLを保存できます。
+
+macOSでPC音声も送る場合は、BlackHole または Soundflower のような仮想ループバック入力が必要です。
+未設定でもマイク音声のみで録音開始できます。
+
+#### 会社PCセットアップ前のMac単体通信テスト
+
+会社PCのGPUバックエンドを触る前に、軽量mockバックエンドでMacクライアントの接続・音声送信・文字表示だけを確認できます。
+このmockはASR/GPU処理を行わず、音声WebSocketの開始を受けたら固定のテスト文字列を返します。
+
+```bash
+# リポジトリ直下
+python -m venv .mock-venv
+source .mock-venv/bin/activate
+pip install fastapi "uvicorn[standard]"
+python scripts/mock_remote_backend.py --host 0.0.0.0 --port 8000
+```
+
+Tauriアプリ側のバックエンドURLには `http://<MacのIPアドレス>:8000` を指定してください。
+同じMac上のmockに接続する場合でも、音声sidecar経路を試すには `127.0.0.1` / `localhost` ではなく、Wi-Fiや有線LANのIPを使います。
+
+```bash
+# macOSでWi-FiのIPを確認する例
+ipconfig getifaddr en0
+```
+
+録音開始後、文字起こし画面に `mock backend received mic audio stream` が表示されれば、フロントエンドからバックエンドへのWebSocket送信と、バックエンドからフロントエンドへの文字起こし配信は通っています。
+
+> `127.0.0.1` / `localhost` を指定するとアプリはローカル一体型として扱うため、REST経由の簡易UI確認になります。音声sidecarの送信経路まで確認する場合は非localhost URLを使ってください。
 
 ## Whisperモデル一覧
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getWsUrl, getClientId, getAuthToken } from "./api";
+import { CONNECTION_CONFIG_CHANGED, getWsUrl, getClientId, getAuthToken } from "./api";
 import type { TranscriptEntry, SessionInfo, WsMessage } from "./types";
 
 interface UseWebSocketOptions {
@@ -15,6 +15,7 @@ export function useWebSocket({ onEntry, onStatus, onClear, onRefresh, onUpdate, 
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  const [connectionVersion, setConnectionVersion] = useState(0);
   const onEntryRef = useRef(onEntry);
   const onStatusRef = useRef(onStatus);
   const onClearRef = useRef(onClear);
@@ -26,6 +27,12 @@ export function useWebSocket({ onEntry, onStatus, onClear, onRefresh, onUpdate, 
   onClearRef.current = onClear;
   onRefreshRef.current = onRefresh;
   onUpdateRef.current = onUpdate;
+
+  useEffect(() => {
+    const handleConfigChanged = () => setConnectionVersion((v) => v + 1);
+    window.addEventListener(CONNECTION_CONFIG_CHANGED, handleConfigChanged);
+    return () => window.removeEventListener(CONNECTION_CONFIG_CHANGED, handleConfigChanged);
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -85,7 +92,7 @@ export function useWebSocket({ onEntry, onStatus, onClear, onRefresh, onUpdate, 
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [enabled]);
+  }, [enabled, connectionVersion]);
 
   return { connected, reconnecting };
 }

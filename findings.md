@@ -89,3 +89,31 @@ Most likely causes are tied:
 - token mismatch because `start_server.ps1` sets `AUTH_TOKEN=monochrome2026` by default, while the token is optional and in-memory in the client UI.
 
 Both produce the same 403 handshake symptom, so the next validation must log route inventory and auth state on backend startup.
+
+## 2026-05-26 Mac Frontend Findings
+
+- Current PR branch is `transcriber` at `fb58fc2` (`Add local ASR support and noise filtering`).
+- Existing Tauri frontend already has a remote mode concept:
+  - `tauri-app/src/lib/api.ts` stores `transcriber_server_url` in `localStorage`.
+  - `useWebSocket` connects to `/ws/transcript?client_id=...`.
+  - `startAudioSidecar` launches a local capture process and sends audio to `/ws/audio/{client_id}`.
+- Current remote client gaps for Mac:
+  - `audio_sidecar/main.py` is Windows-only because it imports `pyaudiowpatch` and uses WASAPI loopback.
+  - `audio_sidecar.rs` only looks for `sidecar/audio_sidecar.exe` in production and runs `python` in dev, so macOS packaging and Python executable resolution are not handled.
+  - Tauri bundle targets are currently Windows-only (`["nsis"]`).
+  - README references `.env.remote`, but the runtime code does not read `VITE_BACKEND_URL`; it always defaults to `http://127.0.0.1:8000` unless localStorage is set.
+  - auth token is in-memory only, so token-protected remote servers require re-entry after restart.
+  - `client_id` is process-local random state, so remote REST and WebSocket session identity changes on restart.
+  - `apiPlayback.ts` and `apiScreenshots.ts` still use static `BASE_URL`, which breaks remote URL changes for playback/screenshot assets.
+- Mac audio capture implication:
+  - Microphone capture can be implemented with `sounddevice`.
+  - System audio on macOS needs a virtual loopback device such as BlackHole or Soundflower; the client can auto-detect likely device names and fall back to mic-only with a clear UI/status message.
+- Current Mac validation:
+  - `sounddevice` sees `MacBook Airのマイク` as the default input.
+  - No BlackHole/Soundflower device is currently visible on this Mac, so this environment can stream mic-only until a virtual loopback driver is installed/configured.
+  - Rust/Cargo was installed with `rustup`; current verified versions are `rustc 1.95.0` and `cargo 1.95.0`.
+  - Tauri dev mode compiled and launched the native app.
+  - Tauri production build generated `Transcriber.app` and `Transcriber_0.1.0_aarch64.dmg`.
+  - `Transcriber.app` launched as a foreground ARM64 macOS process from the generated bundle.
+  - The release app built from this source tree now prefers the prepared local `audio_sidecar/.venv` via a compile-time source-tree fallback before using the bundled Python script.
+  - Full remote E2E still needs a reachable backend PC and, for system audio, a configured macOS loopback device such as BlackHole or Soundflower.

@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # Whisper
     whisper_model: str = "kotoba-v2.0"
     whisper_language: str = "ja"
+    asr_backend: str = "auto"  # "auto", "faster-whisper", "whisper.cpp"
+    whisper_cpp_server_path: str = ""
+    whisper_cpp_model_path: str = ""
+    whisper_cpp_host: str = "127.0.0.1"
+    whisper_cpp_port: int = 8178
+    whisper_cpp_device: int = 0
+    whisper_cpp_request_timeout_s: float = 30.0
 
     # Audio
     audio_sample_rate: int = 16000
@@ -123,6 +130,11 @@ class Settings(BaseSettings):
     hallucination_phrase_max_duration: float = 3.0
     hallucination_speech_ratio_threshold: float = 0.7
     hallucination_logprob_rescue_threshold: float = -0.7
+    hallucination_strict_standalone_phrases: list[str] = [
+        "ありがとうございました",
+        "ありがとうございます",
+        "ご視聴ありがとうございました",
+    ]
 
     # Debug
     debug_save_segments: bool = True
@@ -133,6 +145,7 @@ class Settings(BaseSettings):
 
     # Segmentation refinement (Pass 2)
     segmentation_refine_enabled: bool = True
+    segmentation_refine_allow_cpu: bool = False
     segmentation_refine_interval_s: float = 10.0
     segmentation_refine_window_s: float = 30.0
 
@@ -148,7 +161,7 @@ class Settings(BaseSettings):
     call_notification_enabled: bool = True  # Windows toast notification for detected calls
 
     # Text refinement (Pass 2 — Gemini Flash)
-    text_refine_enabled: bool = True
+    text_refine_enabled: bool = False
     text_refine_batch_size: int = 5
     text_refine_delay_s: float = 3.0
     text_refine_model: str = "gemini-2.5-flash"

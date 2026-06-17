@@ -73,7 +73,7 @@ if ($Deploy) {
         # Kill running processes
         Write-Host "  Stopping Transcriber processes..." -ForegroundColor Gray
         $killed = $false
-        foreach ($name in @("Transcriber", "transcriber-backend")) {
+        foreach ($name in @("Transcriber", "transcriber-backend", "whisper-server")) {
             $procs = Get-Process -Name $name -ErrorAction SilentlyContinue
             if ($procs) {
                 $procs | Stop-Process -Force
