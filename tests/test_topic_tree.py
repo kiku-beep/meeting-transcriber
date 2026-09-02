@@ -335,3 +335,220 @@ def test_apply_patch_ignores_updates_with_non_string_id():
     raw = '{"add":[],"update":[{"id":["t1"],"status":"decided"}],"active":null}'
     patched = apply_patch(tree, parse_patch(raw))
     assert patched.nodes[0].status == "open"
+
+
+def test_reserve_ids_reassigns_add_id_that_collides_with_existing_tree():
+    from backend.core.topic_tree import (
+        TopicNode,
+        TopicPatch,
+        TopicTree,
+        reserve_ids,
+    )
+
+    tree = TopicTree(nodes=[TopicNode(id="t1", label="既存")])
+    reserved = reserve_ids(
+        tree,
+        TopicPatch(add=[TopicNode(id="t1", label="新規")]),
+    )
+
+    assert reserved.add[0].id == "t2"
+
+
+def test_reserve_ids_follows_reassigned_parent_and_active_references():
+    from backend.core.topic_tree import (
+        TopicNode,
+        TopicPatch,
+        TopicTree,
+        reserve_ids,
+    )
+
+    tree = TopicTree(nodes=[TopicNode(id="t1", label="既存")])
+    patch = TopicPatch(
+        add=[
+            TopicNode(id="t1", label="親"),
+            TopicNode(id="child", parent="t1", label="子"),
+        ],
+        active="t1",
+    )
+
+    reserved = reserve_ids(tree, patch)
+
+    assert [node.id for node in reserved.add] == ["t2", "child"]
+    assert reserved.add[1].parent == "t2"
+    assert reserved.active == "t2"
+
+
+def test_reserve_ids_does_not_reassign_update_ids():
+    from backend.core.topic_tree import TopicNode, TopicPatch, TopicTree, reserve_ids
+
+    tree = TopicTree(nodes=[TopicNode(id="t1", label="既存")])
+    reserved = reserve_ids(
+        tree,
+        TopicPatch(
+            add=[TopicNode(id="t1", label="新規")],
+            update=[{"id": "t1", "status": "decided"}],
+        ),
+    )
+
+    assert reserved.update == [{"id": "t1", "status": "decided"}]
+
+
+def test_reserve_ids_preserves_non_colliding_patch_content():
+    from backend.core.topic_tree import TopicNode, TopicPatch, TopicTree, reserve_ids
+
+    tree = TopicTree(nodes=[TopicNode(id="root", label="根")])
+    patch = TopicPatch(
+        add=[TopicNode(id="child", parent="root", label="子")],
+        update=[{"id": "root", "end_sec": 5}],
+        active="child",
+    )
+
+    reserved = reserve_ids(tree, patch)
+
+    assert reserved == patch
+    assert reserved is not patch
+
+
+def test_reserve_ids_does_not_mutate_tree_or_patch():
+    from backend.core.topic_tree import TopicNode, TopicPatch, TopicTree, reserve_ids
+
+    tree = TopicTree(nodes=[TopicNode(id="t1", label="既存")])
+    patch = TopicPatch(
+        add=[TopicNode(id="t1", parent=None, label="新規")],
+        update=[{"id": "t1", "status": "decided"}],
+        active="t1",
+    )
+    tree_before = tree.model_dump()
+    patch_before = patch.model_dump()
+
+    reserve_ids(tree, patch)
+
+    assert tree.model_dump() == tree_before
+    assert patch.model_dump() == patch_before
+
+
+def test_select_tree_for_prompt_returns_equivalent_new_tree_within_limit():
+    from backend.core.topic_tree import TopicNode, TopicTree, select_tree_for_prompt
+
+    tree = TopicTree(
+        nodes=[TopicNode(id="root", label="根"), TopicNode(id="child", parent="root", label="子")],
+        active="child",
+    )
+
+    selected = select_tree_for_prompt(
+        tree,
+        max_nodes=2,
+        recent_window_sec=10,
+        now_sec=100,
+    )
+
+    assert selected == tree
+    assert selected is not tree
+    assert selected.nodes[0] is not tree.nodes[0]
+
+
+def test_select_tree_for_prompt_keeps_all_top_level_nodes_when_over_limit():
+    from backend.core.topic_tree import TopicNode, TopicTree, select_tree_for_prompt
+
+    tree = TopicTree(
+        nodes=[
+            TopicNode(id="root-a", label="A"),
+            TopicNode(id="root-b", label="B"),
+            TopicNode(id="root-c", label="C"),
+            TopicNode(id="old", parent="root-a", label="古い", end_sec=1),
+        ]
+    )
+
+    selected = select_tree_for_prompt(
+        tree,
+        max_nodes=2,
+        recent_window_sec=10,
+        now_sec=100,
+    )
+
+    assert [node.id for node in selected.nodes[:3]] == ["root-a", "root-b", "root-c"]
+
+
+def test_select_tree_for_prompt_keeps_recent_nodes_and_all_ancestors():
+    from backend.core.topic_tree import TopicNode, TopicTree, select_tree_for_prompt
+
+    tree = TopicTree(
+        nodes=[
+            TopicNode(id="root", label="根", end_sec=10),
+            TopicNode(id="middle", parent="root", label="中", end_sec=20),
+            TopicNode(id="recent", parent="middle", label="最近", end_sec=95),
+            TopicNode(id="old-leaf", parent="root", label="古い", end_sec=5),
+        ],
+        active="recent",
+    )
+
+    selected = select_tree_for_prompt(
+        tree,
+        max_nodes=3,
+        recent_window_sec=10,
+        now_sec=100,
+    )
+    selected_ids = {node.id for node in selected.nodes}
+
+    assert {"root", "middle", "recent"} <= selected_ids
+    assert all(node.parent is None or node.parent in selected_ids for node in selected.nodes)
+
+
+def test_select_tree_for_prompt_drops_old_leaf_when_recent_selection_fits():
+    from backend.core.topic_tree import TopicNode, TopicTree, select_tree_for_prompt
+
+    tree = TopicTree(
+        nodes=[
+            TopicNode(id="root", label="根", end_sec=100),
+            TopicNode(id="recent", parent="root", label="最近", end_sec=98),
+            TopicNode(id="old-leaf", parent="root", label="古い", end_sec=1),
+        ]
+    )
+
+    selected = select_tree_for_prompt(
+        tree,
+        max_nodes=2,
+        recent_window_sec=10,
+        now_sec=100,
+    )
+
+    assert [node.id for node in selected.nodes] == ["root", "recent"]
+
+
+def test_select_tree_for_prompt_clears_active_when_active_node_is_dropped():
+    from backend.core.topic_tree import TopicNode, TopicTree, select_tree_for_prompt
+
+    tree = TopicTree(
+        nodes=[
+            TopicNode(id="root", label="根", end_sec=100),
+            TopicNode(id="old-leaf", parent="root", label="古い", end_sec=1),
+            TopicNode(id="new-leaf", parent="root", label="新しい", end_sec=99),
+        ],
+        active="old-leaf",
+    )
+
+    selected = select_tree_for_prompt(
+        tree,
+        max_nodes=2,
+        recent_window_sec=10,
+        now_sec=100,
+    )
+
+    assert selected.active is None
+
+
+def test_select_tree_for_prompt_does_not_mutate_tree():
+    from backend.core.topic_tree import TopicNode, TopicTree, select_tree_for_prompt
+
+    tree = TopicTree(
+        nodes=[
+            TopicNode(id="root", label="根"),
+            TopicNode(id="leaf", parent="root", label="葉", end_sec=1),
+        ],
+        active="leaf",
+    )
+    before = tree.model_dump()
+
+    select_tree_for_prompt(tree, max_nodes=1, recent_window_sec=0, now_sec=100)
+
+    assert tree.model_dump() == before

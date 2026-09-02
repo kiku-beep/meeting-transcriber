@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 from pydantic import BaseModel
@@ -269,6 +270,111 @@ def apply_patch(tree: TopicTree, patch: TopicPatch) -> TopicTree:
 
     active = patch.active if patch.active in nodes_by_id else None
     return TopicTree(nodes=nodes, active=active)
+
+
+def reserve_ids(tree: TopicTree, patch: TopicPatch) -> TopicPatch:
+    """Reserve collision-free ids for added nodes without mutating inputs."""
+
+    existing_ids = {node.id for node in tree.nodes}
+    used_ids = set(existing_ids)
+    assigned_ids: list[str] = []
+    remapped_ids: dict[str, str] = {}
+    next_number = 1
+
+    for node in patch.add:
+        node_id = node.id
+        if node_id in used_ids:
+            while f"t{next_number}" in used_ids:
+                next_number += 1
+            assigned_id = f"t{next_number}"
+            next_number += 1
+        else:
+            assigned_id = node_id
+        used_ids.add(assigned_id)
+        assigned_ids.append(assigned_id)
+        remapped_ids.setdefault(node_id, assigned_id)
+
+    add: list[TopicNode] = []
+    for node, assigned_id in zip(patch.add, assigned_ids):
+        add.append(
+            node.model_copy(
+                deep=True,
+                update={
+                    "id": assigned_id,
+                    "parent": remapped_ids.get(node.parent, node.parent),
+                },
+            )
+        )
+
+    active = remapped_ids.get(patch.active, patch.active)
+    return TopicPatch(
+        add=add,
+        update=[deepcopy(change) for change in patch.update],
+        active=active,
+    )
+
+
+def select_tree_for_prompt(
+    tree: TopicTree,
+    *,
+    max_nodes: int,
+    recent_window_sec: float,
+    now_sec: float,
+) -> TopicTree:
+    """Return a bounded, structurally complete copy of a topic tree."""
+
+    copied_nodes = [node.model_copy(deep=True) for node in tree.nodes]
+    if len(copied_nodes) <= max_nodes:
+        return TopicTree(nodes=copied_nodes, active=tree.active)
+
+    nodes_by_id = {node.id: node for node in copied_nodes}
+    top_level_ids = {node.id for node in copied_nodes if node.parent is None}
+
+    def ancestor_chain(node_id: str) -> list[str] | None:
+        chain: list[str] = []
+        seen: set[str] = set()
+        current_id: str | None = node_id
+        while current_id is not None:
+            if current_id in seen or current_id not in nodes_by_id:
+                return None
+            seen.add(current_id)
+            chain.append(current_id)
+            current_id = nodes_by_id[current_id].parent
+        return chain
+
+    selected_ids = set(top_level_ids)
+    recent_cutoff = now_sec - recent_window_sec
+    for node in copied_nodes:
+        if node.end_sec >= recent_cutoff:
+            chain = ancestor_chain(node.id)
+            if chain is not None:
+                selected_ids.update(chain)
+
+    if len(selected_ids) > max_nodes:
+        selected_ids = set(top_level_ids)
+        optional_added = False
+        candidates = sorted(
+            (node for node in copied_nodes if node.id not in top_level_ids),
+            key=lambda node: node.end_sec,
+            reverse=True,
+        )
+        for node in candidates:
+            chain = ancestor_chain(node.id)
+            if chain is None:
+                continue
+            chain_ids = set(chain)
+            if len(selected_ids | chain_ids) <= max_nodes:
+                selected_ids.update(chain_ids)
+                optional_added = True
+            elif len(selected_ids) <= max_nodes and not optional_added:
+                # Keep the newest complete branch even when its ancestors
+                # make the soft node target unavoidable.
+                selected_ids.update(chain_ids)
+                optional_added = True
+
+    selected_nodes = [node for node in copied_nodes if node.id in selected_ids]
+    active = tree.active if tree.active in selected_ids else None
+    return TopicTree(nodes=selected_nodes, active=active)
 
 
 def tree_to_dict(tree: TopicTree) -> dict:
