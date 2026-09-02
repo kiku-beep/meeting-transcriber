@@ -552,3 +552,44 @@ def test_select_tree_for_prompt_does_not_mutate_tree():
     select_tree_for_prompt(tree, max_nodes=1, recent_window_sec=0, now_sec=100)
 
     assert tree.model_dump() == before
+
+
+def test_apply_patch_treats_blank_parent_as_root():
+    """LLMが最上位論点の parent に空文字を返してもrootとして扱うこと。
+
+    実測での失敗: プロンプトのスキーマ例が "parent":"" だったため
+    LLMがrootに空文字を返し、apply_patch が未知の親＝孤児として全ノードを
+    捨てていた。ツリーが永久に空になり、機能が完全に動かなかった。
+    ユニットテストは parent=None を直接渡していたため検出できなかった。
+    """
+    from backend.core.topic_tree import TopicTree, apply_patch, parse_patch, reserve_ids
+
+    raw = (
+        '{"add":['
+        '{"id":"t1","parent":"","label":"再現実験","status":"open","start_sec":0,"end_sec":60},'
+        '{"id":"t2","parent":"t1","label":"API連携","status":"open","start_sec":48,"end_sec":61}'
+        '],"update":[],"active":"t2"}'
+    )
+    empty = TopicTree()
+    tree = apply_patch(empty, reserve_ids(empty, parse_patch(raw)))
+
+    assert len(tree.nodes) == 2, "空文字parentのrootが捨てられている"
+    assert tree.nodes[0].parent is None
+    assert tree.nodes[1].parent == "t1"
+    assert tree.active == "t2"
+
+    # 空白のみも同様に root として扱う
+    tree2 = apply_patch(empty, reserve_ids(empty, parse_patch(raw.replace('"parent":""', '"parent":"   "'))))
+    assert len(tree2.nodes) == 2
+    assert tree2.nodes[0].parent is None
+
+
+def test_build_patch_prompt_tells_the_model_to_use_null_for_root():
+    """プロンプトが root の parent に null を指示していること（空文字を例示しない）。"""
+    from backend.core.topic_tree import TopicTree, build_patch_prompt
+
+    prompt = build_patch_prompt(TopicTree(), [])
+
+    assert '"parent":null' in prompt
+    assert '"parent":""' not in prompt, "空文字を例示するとLLMがrootに空文字を返す"
+    assert "null" in prompt

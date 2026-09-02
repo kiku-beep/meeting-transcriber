@@ -55,10 +55,12 @@ def format_entries(entries: list[dict]) -> str:
 def build_patch_prompt(tree: TopicTree, entries: list[dict]) -> str:
     """Build the Japanese prompt for generating a topic-tree patch."""
 
+    # parent は必ず null か既存id。空文字を例示すると LLM が root に "" を返し、
+    # 孤児として全部捨てられてツリーが永久に空になる（実測で確認済み）。
     schema = (
-        '{"add":[{"id":"","parent":"","label":"論点(15字以内)",'
+        '{"add":[{"id":"t1","parent":null,"label":"論点(15字以内)",'
         '"status":"open|decided|parked","start_sec":0,"end_sec":0}], '
-        '"update":[{"id":"","status":"","end_sec":0}], '
+        '"update":[{"id":"t1","status":"open|decided|parked","end_sec":0}], '
         '"active":"現在話している論点のid"}'
     )
     return f"""会議の文字起こしから、論点の階層ツリーを増分更新してください。
@@ -73,6 +75,8 @@ def build_patch_prompt(tree: TopicTree, entries: list[dict]) -> str:
 {schema}
 
 前置き、説明文、コードフェンスは禁止です。JSON以外の文字を出力しないでください。
+最上位の論点は parent を null にしてください（空文字は不可）。
+子の論点は parent に親のidを入れてください。
 新規idは既存のidと衝突しない連番にしてください。
 既存論点の続きなら add せず update してください。
 label は {MAX_LABEL_LEN} 字以内にしてください。
@@ -200,9 +204,15 @@ def _normalize_node(node: TopicNode) -> TopicNode | None:
     if end_sec < start_sec:
         end_sec = start_sec
 
+    # LLMは最上位論点の parent に空文字を返すことがある。None に寄せないと
+    # 未知の親として孤児判定され、rootが1つも入らずツリーが永久に空になる。
+    parent = node.parent
+    if isinstance(parent, str) and not parent.strip():
+        parent = None
+
     return TopicNode(
         id=node.id,
-        parent=node.parent,
+        parent=parent,
         label=node.label[:MAX_LABEL_LEN],
         status=node.status if node.status in VALID_STATUSES else "open",
         start_sec=start_sec,
