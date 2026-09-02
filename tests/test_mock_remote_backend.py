@@ -69,9 +69,35 @@ def test_mock_backend_supports_settings_screen_read_endpoints():
         "/api/session/model",
         "/api/session/model/loading-status",
         "/api/summary/models",
+        "/api/summary/engines",
         "/api/call-detection/pending",
     ]
 
     for path in expected_ok_paths:
         response = client.get(path)
         assert response.status_code == 200, path
+
+
+def test_mock_backend_generates_live_ai_response_for_client_session():
+    client = TestClient(create_app())
+    client.post(
+        "/api/session/start?client_id=mac-live",
+        json={"session_name": "live-ai-test"},
+    )
+
+    response = client.post(
+        "/api/summary/live",
+        json={
+            "client_id": "mac-live",
+            "mode": "question",
+            "range_minutes": 15,
+            "question": "何を受信した？",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "question"
+    assert body["range_minutes"] == 15
+    assert body["entry_count"] == 1
+    assert body["usage"]["model"] == "mock"

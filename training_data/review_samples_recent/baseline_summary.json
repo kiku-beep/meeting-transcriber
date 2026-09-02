@@ -1,0 +1,18 @@
+{
+  "model": "kotoba-v2.0",
+  "total_rows": 100,
+  "changed_rows": 46,
+  "unchanged_rows": 54,
+  "total_audio_s": 611.955,
+  "total_transcribe_s": 43.607,
+  "rtf": 0.071259,
+  "ref_chars": 3523,
+  "current_distance": 175,
+  "model_distance": 641,
+  "current_cer": 0.049674,
+  "model_cer": 0.181947,
+  "changed_current_cer": 0.093483,
+  "changed_model_cer": 0.221154,
+  "manifest_path": "training_data\\review_samples_recent\\manifest.jsonl",
+  "predictions_csv": "training_data\\review_samples_recent\\baseline_predictions.csv"
+}

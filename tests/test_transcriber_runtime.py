@@ -1,7 +1,10 @@
 import sys
+import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from backend.core import transcriber as transcriber_mod
 
@@ -162,6 +165,53 @@ def test_auto_runtime_uses_whispercpp_for_kotoba_when_cuda_is_unavailable(monkey
     assert transcriber._runtime_compute == "whisper.cpp"
 
 
+def test_concurrent_load_model_initializes_whispercpp_once(monkeypatch):
+    first_loading = threading.Event()
+    release_loading = threading.Event()
+
+    class BlockingWhisperCppBackend:
+        instances = 0
+        loads = 0
+
+        def __init__(self, model_size):
+            self.model_size = model_size
+            self.is_loaded = False
+            BlockingWhisperCppBackend.instances += 1
+
+        def load_model(self):
+            BlockingWhisperCppBackend.loads += 1
+            first_loading.set()
+            assert release_loading.wait(timeout=2)
+            self.is_loaded = True
+
+    install_fake_torch(monkeypatch, cuda_available=False)
+    monkeypatch.setattr(transcriber_mod, "WhisperCppServerBackend", BlockingWhisperCppBackend)
+    monkeypatch.setattr(transcriber_mod, "is_whisper_cpp_available", lambda model_size: True)
+
+    transcriber = transcriber_mod.Transcriber("kotoba-v2.0")
+    errors: list[BaseException] = []
+
+    def load():
+        try:
+            transcriber.load_model()
+        except BaseException as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=load)
+    second = threading.Thread(target=load)
+    first.start()
+    assert first_loading.wait(timeout=2)
+    second.start()
+    second.join(timeout=0.2)
+    release_loading.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert errors == []
+    assert BlockingWhisperCppBackend.instances == 1
+    assert BlockingWhisperCppBackend.loads == 1
+
+
 def test_transcribe_delegates_to_whispercpp_backend(monkeypatch):
     FakeWhisperCppBackend.calls.clear()
     FakeWhisperCppBackend.transcribe_calls.clear()
@@ -178,3 +228,67 @@ def test_transcribe_delegates_to_whispercpp_backend(monkeypatch):
     assert FakeWhisperCppBackend.transcribe_calls == [
         {"duration": 2.0, "sample_rate": 16000}
     ]
+
+
+def test_concurrent_transcribe_calls_are_serialized(monkeypatch):
+    active_calls = 0
+    max_active_calls = 0
+    state_lock = threading.Lock()
+
+    class BlockingWhisperModel(FakeWhisperModel):
+        def transcribe(self, audio, **kwargs):
+            nonlocal active_calls, max_active_calls
+            with state_lock:
+                active_calls += 1
+                max_active_calls = max(max_active_calls, active_calls)
+            time.sleep(0.05)
+            try:
+                return super().transcribe(audio, **kwargs)
+            finally:
+                with state_lock:
+                    active_calls -= 1
+
+    install_fake_torch(monkeypatch, cuda_available=False)
+    monkeypatch.setattr(transcriber_mod, "WhisperModel", BlockingWhisperModel)
+    monkeypatch.setattr(transcriber_mod, "check_temperature_safe", lambda threshold: True)
+
+    transcriber = transcriber_mod.Transcriber("tiny")
+    transcriber.load_model()
+    errors: list[BaseException] = []
+
+    def run_transcription():
+        try:
+            transcriber.transcribe(np.zeros(16000, dtype=np.float32))
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run_transcription) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert errors == []
+    assert max_active_calls == 1
+
+
+def test_failed_whispercpp_load_does_not_publish_broken_backend(monkeypatch):
+    class FailingWhisperCppBackend:
+        def __init__(self, model_size):
+            self.model_size = model_size
+            self.is_loaded = False
+
+        def load_model(self):
+            raise RuntimeError("server failed")
+
+    install_fake_torch(monkeypatch, cuda_available=False)
+    monkeypatch.setattr(transcriber_mod, "WhisperCppServerBackend", FailingWhisperCppBackend)
+    monkeypatch.setattr(transcriber_mod, "is_whisper_cpp_available", lambda model_size: True)
+
+    transcriber = transcriber_mod.Transcriber("kotoba-v2.0")
+    with pytest.raises(RuntimeError, match="server failed"):
+        transcriber.load_model()
+
+    assert transcriber._whisper_cpp is None
+    with pytest.raises(RuntimeError, match="Model not loaded"):
+        transcriber.transcribe(np.zeros(16000, dtype=np.float32))

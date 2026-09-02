@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 
 import numpy as np
@@ -36,14 +37,15 @@ def should_run_segmentation_refinement() -> bool:
     return bool(torch.cuda.is_available())
 
 
-class SegmentationRefiner:
-    """Background refinement of speaker labels using segmentation model."""
+class SegmentationModel:
+    """Process-wide segmentation model with serialized lifecycle and inference."""
 
     def __init__(self):
         self._seg_model = None
         self._to_multilabel = None
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
-        self._last_processed_time: float = 0.0
+        self._load_lock = threading.Lock()
+        self._inference_lock = threading.Lock()
 
     @property
     def is_loaded(self) -> bool:
@@ -51,6 +53,10 @@ class SegmentationRefiner:
 
     def load_model(self) -> None:
         """Load pyannote/segmentation-3.0 model."""
+        with self._load_lock:
+            self._load_model_once()
+
+    def _load_model_once(self) -> None:
         if self._seg_model is not None:
             return
 
@@ -78,6 +84,10 @@ class SegmentationRefiner:
 
     def unload_model(self) -> None:
         """Release model from GPU."""
+        with self._load_lock, self._inference_lock:
+            self._unload_model_once()
+
+    def _unload_model_once(self) -> None:
         if self._seg_model is not None:
             del self._seg_model
             self._seg_model = None
@@ -86,7 +96,7 @@ class SegmentationRefiner:
                 torch.cuda.empty_cache()
             logger.info("segmentation-3.0 unloaded")
 
-    def _run_segmentation(self, audio: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
+    def run_chunk(self, audio: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
         """Run segmentation on a 10-second audio chunk.
 
         Returns:
@@ -102,12 +112,32 @@ class SegmentationRefiner:
         waveform = torch.from_numpy(audio).float().unsqueeze(0).unsqueeze(0)  # (1, 1, samples)
         waveform = waveform.to(self._device)
 
-        with torch.no_grad():
+        with self._inference_lock, torch.no_grad():
             powerset_output = self._seg_model(waveform)  # (1, num_frames, 7)
-
-        # Convert powerset → multi-label: (1, num_frames, 3)
-        multilabel = self._to_multilabel(powerset_output)
+            # Convert powerset → multi-label: (1, num_frames, 3)
+            multilabel = self._to_multilabel(powerset_output)
         return multilabel[0].cpu().numpy()  # (num_frames, 3)
+
+
+class SegmentationRefiner:
+    """Session-local refinement state backed by a shared segmentation model."""
+
+    def __init__(self, model_backend: SegmentationModel | None = None):
+        self._model_backend = model_backend or SegmentationModel()
+        self._last_processed_time: float = 0.0
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._model_backend.is_loaded
+
+    def load_model(self) -> None:
+        self._model_backend.load_model()
+
+    def unload_model(self) -> None:
+        self._model_backend.unload_model()
+
+    def _run_segmentation(self, audio: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
+        return self._model_backend.run_chunk(audio, sample_rate)
 
     def refine_labels(
         self,

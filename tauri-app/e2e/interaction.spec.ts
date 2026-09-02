@@ -29,20 +29,21 @@ test.describe("Interaction Tests", () => {
   });
 
   test("BackendLoaderが表示される", async ({ page }) => {
-    // バックエンド未起動時、BackendLoaderが表示されるはず
-    const title = page.locator("text=Transcriber");
-    await expect(title).toBeVisible();
+    const loader = page.getByTestId("backend-loader");
+    await expect(loader).toBeVisible();
+    await expect(loader).toHaveCSS("background-color", "rgb(247, 247, 248)");
   });
 
-  test("ローディングメッセージが表示される", async ({ page }) => {
-    const loading = page.locator("text=バックエンド起動中");
-    await expect(loading).toBeVisible();
+  test("接続中メッセージが表示される", async ({ page }) => {
+    await expect(page.getByRole("status")).toContainText("バックエンドに接続しています");
   });
 
-  test("ローディングインジケーターが存在する", async ({ page }) => {
-    // プログレスバーのアニメーション要素
-    const indicator = page.locator(".animate-pulse");
-    await expect(indicator).toBeVisible();
+  test("接続設定は必要なときだけ展開できる", async ({ page }) => {
+    await expect(page.getByLabel("バックエンドURL")).not.toBeVisible();
+    await page.getByText("接続設定", { exact: true }).click();
+    await expect(page.getByLabel("バックエンドURL")).toBeVisible();
+    await expect(page.getByRole("button", { name: "接続", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "接続せずに開く" })).toBeVisible();
   });
 
   test("BackendLoaderにクラッシュなし", async ({ page }) => {

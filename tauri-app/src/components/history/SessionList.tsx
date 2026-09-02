@@ -11,6 +11,7 @@ import {
 
 interface Props {
   sessions: TranscriptSession[];
+  loading?: boolean;
   onSelectSession: (id: string) => void;
   onRenameSession: (id: string, newName: string) => Promise<void>;
   onDeleteSession: (id: string) => Promise<void>;
@@ -52,7 +53,7 @@ function formatSize(bytes?: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
 }
 
-export default function SessionList({ sessions, onSelectSession, onRenameSession, onDeleteSession, onDeleteSessions, onRefresh }: Props) {
+export default function SessionList({ sessions, loading = false, onSelectSession, onRenameSession, onDeleteSession, onDeleteSessions, onRefresh }: Props) {
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -203,7 +204,7 @@ export default function SessionList({ sessions, onSelectSession, onRenameSession
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="history-session-list flex flex-col h-full">
       {/* Search bar */}
       <div className="p-4 border-b border-slate-700 shrink-0 flex items-center gap-3">
         <h2 className="text-lg font-semibold shrink-0">履歴</h2>
@@ -306,11 +307,18 @@ export default function SessionList({ sessions, onSelectSession, onRenameSession
         <table className="w-full">
           <thead className="sticky top-0 bg-slate-800 z-10">
             <tr className="text-left text-xs text-slate-400 border-b border-slate-600">
-              <th className="pl-3 pr-1 py-2.5 w-8">
+              <th
+                className="pl-3 pr-1 py-2.5 w-8 cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleSelectAll();
+                }}
+              >
                 <input
                   type="checkbox"
                   checked={allFilteredSelected}
                   onChange={toggleSelectAll}
+                  onClick={(e) => e.stopPropagation()}
                   className="w-3.5 h-3.5 accent-cyan-500 cursor-pointer"
                 />
               </th>
@@ -322,7 +330,13 @@ export default function SessionList({ sessions, onSelectSession, onRenameSession
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 ? (
+            {loading && sessions.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="text-center text-slate-500 py-12">
+                  読み込み中...
+                </td>
+              </tr>
+            ) : filtered.length === 0 ? (
               <tr>
                 <td colSpan={6} className="text-center text-slate-500 py-12">
                   {sessions.length === 0
@@ -345,7 +359,13 @@ export default function SessionList({ sessions, onSelectSession, onRenameSession
                     className={`group border-b border-slate-700/50 hover:bg-slate-700/40 cursor-pointer transition-colors ${isSelected ? "bg-slate-700/30" : ""}`}
                   >
                     {/* Checkbox */}
-                    <td className="pl-3 pr-1 py-3">
+                    <td
+                      className="pl-3 pr-1 py-3 w-8 cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleSelect(s.session_id);
+                      }}
+                    >
                       <input
                         type="checkbox"
                         checked={isSelected}
@@ -356,7 +376,10 @@ export default function SessionList({ sessions, onSelectSession, onRenameSession
                     </td>
 
                     {/* Favorite */}
-                    <td className="py-3">
+                    <td
+                      className="py-3 w-8 cursor-pointer"
+                      onClick={(e) => handleToggleFavorite(e, s.session_id, !!s.is_favorite)}
+                    >
                       <button
                         onClick={(e) => handleToggleFavorite(e, s.session_id, !!s.is_favorite)}
                         className={`text-base leading-none px-0.5 hover:scale-110 transition-transform ${s.is_favorite ? "text-yellow-400" : "text-slate-600 hover:text-slate-400"}`}

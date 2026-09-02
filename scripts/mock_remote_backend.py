@@ -152,6 +152,7 @@ def create_app() -> FastAPI:
         return {
             "gemini_api_key_set": False,
             "gemini_api_key_masked": None,
+            "summary_engine": "gemini",
             "text_refine_enabled": False,
         }
 
@@ -200,6 +201,59 @@ def create_app() -> FastAPI:
                     "accuracy": "low",
                 }
             ],
+        }
+
+    @app.get("/api/summary/engines")
+    async def summary_engines() -> dict[str, Any]:
+        return {
+            "current_engine": "gemini",
+            "engines": [
+                {
+                    "id": "gemini",
+                    "label": "Gemini API",
+                    "description": "Mock Gemini summary engine",
+                    "billing": "api",
+                },
+                {
+                    "id": "claude-code",
+                    "label": "Claude Code",
+                    "description": "Mock Claude Code summary engine",
+                    "billing": "claude-subscription",
+                },
+            ],
+        }
+
+    @app.post("/api/summary/live")
+    async def live_ai(body: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+        client_id = str(body.get("client_id") or "default")
+        mode = str(body.get("mode") or "summary")
+        question = str(body.get("question") or "").strip()
+        session = state.session(client_id)
+        if not session.entries:
+            from fastapi import HTTPException
+            raise HTTPException(400, "文字起こしが空です")
+        if mode == "question" and not question:
+            from fastapi import HTTPException
+            raise HTTPException(400, "質問を入力してください")
+
+        end = max(float(entry.get("timestamp_end", 0)) for entry in session.entries)
+        range_minutes = body.get("range_minutes")
+        start = 0.0 if range_minutes is None else max(0.0, end - float(range_minutes) * 60)
+        selected = [entry for entry in session.entries if float(entry.get("timestamp_end", 0)) >= start]
+        content = (
+            f"## 回答\nMock回答: {question}"
+            if mode == "question"
+            else "## ここまでの要点\nMockバックエンドで音声を受信しました。"
+        )
+        return {
+            "content": content,
+            "mode": mode,
+            "range_minutes": range_minutes,
+            "range_start_seconds": start,
+            "range_end_seconds": end,
+            "generated_at": datetime.now().isoformat(),
+            "entry_count": len(selected),
+            "usage": {"model": "mock", "billing": "claude-subscription"},
         }
 
     @app.get("/api/call-detection/pending")

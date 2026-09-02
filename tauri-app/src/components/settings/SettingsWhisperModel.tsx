@@ -65,9 +65,9 @@ export default function SettingsWhisperModel({
       </div>
       {switching && (
         <div className="space-y-1">
-          <div className="w-full bg-slate-700 rounded-full h-2 overflow-hidden">
+          <div className="settings-whisper-model__track w-full rounded-full h-2 overflow-hidden">
             <div
-              className="bg-cyan-500 h-2 rounded-full transition-all duration-500"
+              className="settings-whisper-model__progress h-2 rounded-full"
               style={{ width: `${Math.max(switchProgress * 100, 5)}%` }}
             />
           </div>

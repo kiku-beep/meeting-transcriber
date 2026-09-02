@@ -4,6 +4,7 @@ import type { MeetingConfig } from "./types";
 export interface ConfigStatus {
   gemini_api_key_set: boolean;
   gemini_api_key_masked: string | null;
+  summary_engine?: string;
   text_refine_enabled?: boolean;
 }
 

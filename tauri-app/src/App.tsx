@@ -11,7 +11,7 @@ const TABS = ["文字起こし", "話者", "辞書", "履歴", "設定"] as cons
 export default function App() {
   const [backendReady, setBackendReady] = useState(false);
   const [activeTab, setActiveTab] = useState(0);
-  const [visitedTabs, setVisitedTabs] = useState<Set<number>>(new Set([0]));
+  const [visitedTabs, setVisitedTabs] = useState<Set<number>>(new Set([0, 3]));
   const [autoSummarizeSessionId, setAutoSummarizeSessionId] = useState<string | null>(null);
 
   const handleSessionStop = useCallback((sessionId: string) => {
@@ -35,23 +35,22 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-slate-900 text-slate-100">
-      {/* Tab Bar */}
-      <nav className="flex border-b border-slate-700 bg-slate-800 shrink-0">
-        {TABS.map((tab, i) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(i)}
-            className={`px-5 py-3 text-sm font-medium transition-colors ${
-              activeTab === i
-                ? "text-cyan-400 border-b-2 border-cyan-400 bg-slate-900"
-                : "text-slate-400 hover:text-slate-200 hover:bg-slate-700/50"
-            }`}
-          >
-            {tab}
-          </button>
-        ))}
-      </nav>
+    <div className="app-shell flex flex-col h-screen">
+      <header className="app-topbar">
+        <span className="app-brand">Transcriber</span>
+        <nav className="app-navigation" aria-label="メインナビゲーション">
+          {TABS.map((tab, i) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(i)}
+              aria-current={activeTab === i ? "page" : undefined}
+              className={`app-navigation__tab ${activeTab === i ? "app-navigation__tab--active" : ""}`}
+            >
+              {tab}
+            </button>
+          ))}
+        </nav>
+      </header>
 
       {/* Tab Content — Tab 0 always mounted (WebSocket), others lazy-mounted on first visit */}
       <main className="flex-1 overflow-hidden">

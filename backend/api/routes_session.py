@@ -3,7 +3,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from backend.core.transcriber import AVAILABLE_MODELS, VRAM_REQUIREMENTS, warm_disk_cache
-from backend.models.session import TranscriptionSession, get_or_create_session, get_session
+from backend.models.session import (
+    TranscriptionSession,
+    get_or_create_session,
+    get_session,
+    release_model_switch,
+    reserve_model_switch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,12 +118,15 @@ async def switch_model(
     if req.model_size not in AVAILABLE_MODELS:
         raise HTTPException(400, f"Invalid model: {req.model_size}. Available: {AVAILABLE_MODELS}")
 
-    if session.status.value != "idle":
+    if not reserve_model_switch():
         raise HTTPException(409, "セッション中はモデルを変更できません")
 
     import asyncio
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, session._transcriber.switch_model, req.model_size)
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, session._transcriber.switch_model, req.model_size)
+    finally:
+        release_model_switch()
     return {
         "model_size": session._transcriber.model_size,
         "is_loaded": session._transcriber.is_loaded,

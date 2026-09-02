@@ -49,7 +49,7 @@ export default function TranscriptList({
   }, [entries]);
 
   return (
-    <div className="flex-1 overflow-y-auto p-2" ref={containerRef} onScroll={handleScroll}>
+    <div className="live-transcript-list flex-1 overflow-y-auto" ref={containerRef} onScroll={handleScroll}>
       {entries.length === 0 ? (
         <p className="text-slate-500 text-center mt-20">
           {isRunning ? "音声を待っています..." : "録音を開始してください"}

@@ -34,17 +34,20 @@ export default function Dictionary() {
   };
 
   if (!dict) {
-    return <div className="p-6 text-slate-400 text-sm">読み込み中…</div>;
+    return <div className="workspace-page"><div className="workspace-loading">辞書を読み込んでいます</div></div>;
   }
 
   return (
-    <div className="p-6 space-y-6 overflow-y-auto h-full">
-      <h2 className="text-lg font-semibold">辞書設定</h2>
+    <div className="workspace-page overflow-y-auto h-full">
+      <header className="page-heading">
+        <div><p className="workspace-eyebrow">LANGUAGE RULES</p><h2>辞書</h2></div>
+        <span className="page-heading__meta">{dict.replacements.length}ルール</span>
+      </header>
 
       {error && (
-        <div className="p-3 bg-red-900/50 border border-red-700 rounded text-red-300 text-sm flex items-center justify-between">
+        <div className="inline-alert inline-alert--error flex items-center justify-between" role="alert">
           <span>{error}</span>
-          <button onClick={() => setError("")} className="text-red-400 hover:text-red-300 ml-2 shrink-0">&#x2715;</button>
+          <button onClick={() => setError("")} className="inline-alert__dismiss ml-2 shrink-0">&#x2715;</button>
         </div>
       )}
 

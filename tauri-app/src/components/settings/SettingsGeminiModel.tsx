@@ -17,7 +17,7 @@ export default function SettingsGeminiModel({ geminiModels, geminiCurrent, selec
 
   return (
     <section className="space-y-3">
-      <h3 className="text-sm font-medium text-slate-300">Gemini モデル (要約用)</h3>
+      <h3 className="text-sm font-medium text-slate-300">Gemini モデル (要約フォールバック用)</h3>
       <div className="flex items-center gap-3 flex-wrap">
         <select
           value={selectedGemini}

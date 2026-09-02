@@ -60,15 +60,15 @@ export default function MeetingParticipants({ visible, speakers, onSubmit }: Pro
   );
 
   return (
-    <div className="text-xs">
+    <div className="meeting-participants text-xs">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="text-slate-400 hover:text-slate-300 flex items-center gap-1"
+        className="meeting-participants__toggle flex items-center gap-1"
       >
         <span className={`transition-transform ${expanded ? "rotate-90" : ""}`}>&#9656;</span>
         会議参加者
         {participants.length > 0 && (
-          <span className="text-emerald-400 ml-1">({participants.length}名)</span>
+          <span className="meeting-participants__count ml-1">({participants.length}名)</span>
         )}
       </button>
 
@@ -81,7 +81,7 @@ export default function MeetingParticipants({ visible, speakers, onSubmit }: Pro
                 <button
                   key={s.id}
                   onClick={() => handleAddRegistered(s)}
-                  className="inline-flex items-center gap-1 bg-cyan-900/40 text-cyan-300 border border-cyan-700/50 rounded px-2 py-0.5 hover:bg-cyan-800/50 text-xs"
+                  className="meeting-participants__suggestion inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs"
                 >
                   + {s.name}
                 </button>
@@ -96,14 +96,14 @@ export default function MeetingParticipants({ visible, speakers, onSubmit }: Pro
                 <span
                   key={p.name}
                   className={`inline-flex items-center gap-1 rounded px-2 py-0.5 ${
-                    p.speakerId ? "bg-cyan-900/30 text-cyan-200" : "bg-slate-700 text-slate-200"
+                    p.speakerId ? "meeting-participants__chip meeting-participants__chip--registered" : "meeting-participants__chip"
                   }`}
                 >
                   {p.name}
                   {!submitted && (
                     <button
                       onClick={() => handleRemove(p.name)}
-                      className="text-slate-400 hover:text-red-400"
+                      className="meeting-participants__remove"
                     >
                       &#x2715;
                     </button>
@@ -123,19 +123,19 @@ export default function MeetingParticipants({ visible, speakers, onSubmit }: Pro
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="参加者名を入力"
-                className="flex-1 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                className="meeting-participants__input flex-1 rounded px-2 py-1 text-sm focus:outline-none"
               />
               <button
                 onClick={handleAdd}
                 disabled={!input.trim()}
-                className="px-2 py-1 bg-slate-700 text-slate-300 rounded hover:bg-slate-600 disabled:opacity-40"
+                className="meeting-participants__add px-2 py-1 rounded disabled:opacity-40"
               >
                 追加
               </button>
               {participants.length > 0 && (
                 <button
                   onClick={handleSubmit}
-                  className="px-2 py-1 bg-emerald-700 text-emerald-100 rounded hover:bg-emerald-600"
+                  className="meeting-participants__submit px-2 py-1 rounded"
                 >
                   設定
                 </button>
@@ -146,10 +146,10 @@ export default function MeetingParticipants({ visible, speakers, onSubmit }: Pro
           {/* Submitted state */}
           {submitted && (
             <div className="flex items-center gap-2">
-              <span className="text-emerald-400">設定済み</span>
+              <span className="meeting-participants__submitted">設定済み</span>
               <button
                 onClick={handleReset}
-                className="text-slate-400 hover:text-slate-300 text-xs"
+                className="meeting-participants__reset text-xs"
               >
                 リセット
               </button>

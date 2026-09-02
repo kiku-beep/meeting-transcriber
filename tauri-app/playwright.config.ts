@@ -36,5 +36,17 @@ export default defineConfig({
       name: "settings",
       testMatch: /settings\.spec\.ts/,
     },
+    {
+      name: "history",
+      testMatch: /history-screenshot-sync\.spec\.ts/,
+    },
+    {
+      name: "live-ai",
+      testMatch: /live-ai\.spec\.ts/,
+    },
+    {
+      name: "ui-colors",
+      testMatch: /ui-colors\.spec\.ts/,
+    },
   ],
 });

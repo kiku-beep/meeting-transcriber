@@ -17,12 +17,12 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="h-screen flex flex-col items-center justify-center bg-slate-900 text-white gap-4">
-          <h1 className="text-xl font-bold text-red-400">エラーが発生しました</h1>
-          <p className="text-slate-400 text-sm">{this.state.error?.message}</p>
+        <div className="error-boundary" role="alert">
+          <h1 className="error-boundary__title">エラーが発生しました</h1>
+          <p className="error-boundary__message">{this.state.error?.message}</p>
           <button
             onClick={() => window.location.reload()}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm"
+            className="error-boundary__reload"
           >
             再読み込み
           </button>

@@ -1,92 +1,96 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { setGeminiModel } from "../../lib/apiSummary";
-import type { GeminiModelInfo, SummaryResult } from "../../lib/types";
+import {
+  getFallbackDiagnostics,
+  type SummaryResult,
+} from "../../lib/types";
 
 interface Props {
-  geminiModels: GeminiModelInfo[];
-  geminiCurrent: string;
-  onGeminiCurrentChange: (id: string) => void;
   onGenerate: () => void;
   generating: boolean;
   summary: string;
   summaryResult: SummaryResult | null;
-  onError: (msg: string) => void;
 }
 
 export default function SummaryView({
-  geminiModels,
-  geminiCurrent,
-  onGeminiCurrentChange,
   onGenerate,
   generating,
   summary,
   summaryResult,
-  onError,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const [copiedSlack, setCopiedSlack] = useState(false);
+  const usage = summaryResult?.usage;
+  const usedClaude = usage?.billing === "claude-subscription";
+  const usedCodex = usage?.billing === "codex-subscription";
+  const usedGemini = usage?.billing === "api"
+    || (!usage?.billing && Boolean(usage?.fallback_from));
+  const fallbackDiagnostics = getFallbackDiagnostics(usage);
 
   return (
-    <div className="space-y-4">
-      {/* Model selector + Generate button */}
+    <div className="summary-view space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
-        {geminiModels.length > 0 && (
-          <select
-            value={geminiCurrent}
-            onChange={async (e) => {
-              const id = e.target.value;
-              try {
-                await setGeminiModel(id);
-                onGeminiCurrentChange(id);
-              } catch (err) {
-                onError(err instanceof Error ? err.message : String(err));
-              }
-            }}
-            className="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm"
-          >
-            {geminiModels.map((m) => (
-              <option key={m.id} value={m.id}>{m.label}</option>
-            ))}
-          </select>
-        )}
         <button
           onClick={onGenerate}
           disabled={generating}
-          className="px-4 py-1.5 bg-cyan-600 hover:bg-cyan-700 disabled:bg-slate-600 rounded text-sm transition-colors"
+          className="summary-view__button summary-view__button--primary px-4 py-1.5 text-sm"
         >
           {generating ? "生成中..." : "要約を生成"}
         </button>
       </div>
 
-      {/* Model info badges */}
-      {geminiModels.length > 0 && (() => {
-        const cur = geminiModels.find((m) => m.id === geminiCurrent);
-        if (!cur) return null;
-        const speedLabel: Record<string, string> = { very_fast: "最速", fast: "速い", slow: "遅め" };
-        const accuracyLabel: Record<string, string> = { low: "低", medium: "中", high: "高", very_high: "最高" };
-        const speedColor: Record<string, string> = { very_fast: "bg-emerald-800 text-emerald-200", fast: "bg-emerald-900 text-emerald-300", slow: "bg-amber-900 text-amber-300" };
-        const accuracyColor: Record<string, string> = { low: "bg-slate-700 text-slate-300", medium: "bg-blue-900 text-blue-300", high: "bg-blue-800 text-blue-200", very_high: "bg-violet-800 text-violet-200" };
-        return (
-          <div className="flex items-center gap-2 text-xs flex-wrap">
-            <span className={`px-2 py-0.5 rounded ${speedColor[cur.speed] || ""}`}>
-              速度: {speedLabel[cur.speed] || cur.speed}
-            </span>
-            <span className={`px-2 py-0.5 rounded ${accuracyColor[cur.accuracy] || ""}`}>
-              精度: {accuracyLabel[cur.accuracy] || cur.accuracy}
-            </span>
-            <span className="px-2 py-0.5 rounded bg-slate-700 text-slate-300">
-              ${cur.input_price} / ${cur.output_price} per 1M tokens
-            </span>
-            {summaryResult?.usage && (
-              <span className="text-slate-400">
-                {summaryResult.usage.total_tokens?.toLocaleString()} tokens
-                {" "}(${summaryResult.usage.cost_usd?.toFixed(4)})
+      {(usedClaude || usedCodex || usedGemini) && (
+        <div className="flex items-center gap-2 text-xs flex-wrap">
+          {usedClaude && (
+            <>
+              <span className="summary-view__badge summary-view__badge--accent">
+                Claude Code
               </span>
-            )}
-          </div>
-        );
-      })()}
+              <span className="summary-view__badge summary-view__badge--muted">
+                Claudeサブスク枠
+              </span>
+            </>
+          )}
+          {usedCodex && (
+            <>
+              <span className="summary-view__badge summary-view__badge--accent">
+                Codex CLI
+              </span>
+              <span className="summary-view__badge summary-view__badge--muted">
+                Codexサブスク枠
+              </span>
+            </>
+          )}
+          {usedGemini && (
+            <>
+              <span className="summary-view__badge summary-view__badge--warning">
+                Gemini
+              </span>
+              {fallbackDiagnostics.length > 0 && (
+                <span className="summary-view__badge summary-view__badge--muted">
+                  前段プロバイダ失敗のためGeminiを使用
+                </span>
+              )}
+              {usage?.total_tokens !== undefined && usage?.cost_usd !== undefined && (
+                <span className="summary-view__meta">
+                  {usage.total_tokens.toLocaleString()} tokens
+                  {" "}(${usage.cost_usd.toFixed(4)})
+                </span>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {fallbackDiagnostics.length > 0 && (
+        <div className="inline-alert inline-alert--warning" role="status">
+          {fallbackDiagnostics.map((diagnostic) => (
+            <div key={diagnostic.provider}>
+              {diagnostic.label}エラー: {diagnostic.detail}
+            </div>
+          ))}
+        </div>
+      )}
 
       {summary ? (
         <div className="space-y-2">
@@ -97,7 +101,7 @@ export default function SummaryView({
                 setCopied(true);
                 setTimeout(() => setCopied(false), 2000);
               }}
-              className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs transition-colors"
+              className="summary-view__button px-3 py-1 text-xs"
             >
               {copied ? "コピー済み" : "コピー"}
             </button>
@@ -112,7 +116,7 @@ export default function SummaryView({
                 setCopiedSlack(true);
                 setTimeout(() => setCopiedSlack(false), 2000);
               }}
-              className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs transition-colors"
+              className="summary-view__button px-3 py-1 text-xs"
             >
               {copiedSlack ? "コピー済み" : "Slack用コピー"}
             </button>
@@ -122,7 +126,7 @@ export default function SummaryView({
           </div>
         </div>
       ) : (
-        <p className="text-slate-500">要約がありません。「要約を生成」で作成できます。</p>
+        <p className="summary-view__empty">要約がありません。「要約を生成」で作成できます。</p>
       )}
     </div>
   );

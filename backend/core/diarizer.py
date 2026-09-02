@@ -8,6 +8,7 @@ via cosine similarity.
 from __future__ import annotations
 
 import logging
+import threading
 
 import numpy as np
 import torch
@@ -22,16 +23,21 @@ logger = logging.getLogger(__name__)
 EMBEDDING_DIM = 256
 
 
-class Diarizer:
-    """Extract speaker embeddings and match against registered speakers."""
+class SpeakerEmbeddingModel:
+    """Process-wide WeSpeaker model with serialized lifecycle and inference."""
 
     def __init__(self):
         self._model = None
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
-        self._threshold_tracker = AdaptiveThresholdTracker(settings.speaker_similarity_threshold)
+        self._load_lock = threading.Lock()
+        self._inference_lock = threading.Lock()
 
     def load_model(self) -> None:
         """Load the WeSpeaker ResNet34-LM embedding model."""
+        with self._load_lock:
+            self._load_model_once()
+
+    def _load_model_once(self) -> None:
         if self._model is not None:
             return
 
@@ -69,6 +75,10 @@ class Diarizer:
 
     def unload_model(self) -> None:
         """Release the model."""
+        with self._load_lock, self._inference_lock:
+            self._unload_model_once()
+
+    def _unload_model_once(self) -> None:
         if self._model is not None:
             del self._model
             self._model = None
@@ -107,7 +117,7 @@ class Diarizer:
                 waveform.squeeze(0), sample_rate, 16000
             ).unsqueeze(0)
 
-        with torch.inference_mode():
+        with self._inference_lock, torch.inference_mode():
             embeddings = self._model(waveform.to(self._device))
 
         # L2 normalize
@@ -117,6 +127,27 @@ class Diarizer:
             emb = emb / norm
 
         return emb
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._model is not None
+
+
+class Diarizer:
+    """Session-local speaker matching backed by a shared embedding model."""
+
+    def __init__(self, model_backend: SpeakerEmbeddingModel | None = None):
+        self._model_backend = model_backend or SpeakerEmbeddingModel()
+        self._threshold_tracker = AdaptiveThresholdTracker(settings.speaker_similarity_threshold)
+
+    def load_model(self) -> None:
+        self._model_backend.load_model()
+
+    def unload_model(self) -> None:
+        self._model_backend.unload_model()
+
+    def extract_embedding(self, audio: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
+        return self._model_backend.extract_embedding(audio, sample_rate)
 
     def extract_embedding_windowed(self, audio: np.ndarray, sample_rate: int = 16000,
                                       window_s: float = 3.0, hop_s: float = 1.5) -> np.ndarray:
@@ -213,4 +244,4 @@ class Diarizer:
 
     @property
     def is_loaded(self) -> bool:
-        return self._model is not None
+        return self._model_backend.is_loaded

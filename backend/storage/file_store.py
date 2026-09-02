@@ -138,12 +138,11 @@ def list_sessions() -> list[dict]:
         if meta_path.exists():
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                meta["total_size_bytes"] = _dir_size(session_dir)
                 sessions.append(meta)
             except Exception:
                 sessions.append({"session_id": session_dir.name, "error": "corrupt metadata"})
         else:
-            sessions.append({"session_id": session_dir.name, "total_size_bytes": _dir_size(session_dir)})
+            sessions.append({"session_id": session_dir.name})
     return sessions
 
 
@@ -163,6 +162,15 @@ def load_transcript_text(session_id: str) -> str | None:
     if not path.exists():
         return None
     return path.read_text(encoding="utf-8")
+
+
+def load_session_metadata(session_id: str) -> dict | None:
+    """Load metadata.json for a session."""
+    _validate_session_id(session_id)
+    path = settings.sessions_dir / session_id / "metadata.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def load_summary(session_id: str) -> str | None:

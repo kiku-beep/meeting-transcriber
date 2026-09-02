@@ -57,6 +57,7 @@ from backend.api.routes_call_detection import router as call_detection_router
 from backend.api.ws_transcription import router as ws_router
 from backend.api.ws_audio_ingest import router as audio_ingest_router
 from backend.config import settings
+from backend.core.model_runtime import get_model_runtime
 from backend.models.session import get_session
 from backend.services.call_detector import get_call_detector
 
@@ -70,17 +71,21 @@ logger = logging.getLogger(__name__)
 async def _preload_models():
     try:
         session = get_session()
+        runtime = get_model_runtime()
         logger.info("Pre-loading models...")
 
         loop = asyncio.get_event_loop()
         # Load sequentially to avoid CUDA initialization race conditions on Windows
         await loop.run_in_executor(None, session._mic_buffer.load_model)
-        await loop.run_in_executor(None, session._transcriber.load_model)
-        await loop.run_in_executor(None, session._diarizer.load_model)
+        await loop.run_in_executor(None, runtime.load_core_models)
         logger.info("All models pre-loaded")
 
         # Auto-recompute invalid embeddings from stored audio samples
-        await loop.run_in_executor(None, _auto_recompute_embeddings, session._diarizer)
+        await loop.run_in_executor(
+            None,
+            _auto_recompute_embeddings,
+            runtime.create_diarizer(),
+        )
     except Exception:
         logger.exception("CRITICAL: Model preload failed")
 

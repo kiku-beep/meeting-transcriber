@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -29,6 +30,27 @@ def _env_file_path() -> Path:
     return _base_dir() / ".env"
 
 
+def update_env_file(key: str, value: str) -> None:
+    """Update a key=value pair in the persistent .env file."""
+    env_path = _env_file_path()
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    if env_path.exists():
+        content = env_path.read_text(encoding="utf-8")
+    else:
+        content = ""
+
+    pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
+    new_line = f"{key}={value}"
+    if pattern.search(content):
+        content = pattern.sub(new_line, content)
+    else:
+        if content and not content.endswith("\n"):
+            content += "\n"
+        content += new_line + "\n"
+
+    env_path.write_text(content, encoding="utf-8")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(_env_file_path()),
@@ -42,6 +64,15 @@ class Settings(BaseSettings):
 
     # Gemini
     gemini_model: str = "gemini-3-flash-preview"
+
+    # Meeting summary generation
+    summary_engine: str = "auto"  # "auto", "gemini", "claude-code"
+    claude_code_command: str = "claude"
+    claude_code_model: str = ""
+    claude_code_timeout_s: float = 300.0
+    codex_cli_command: str = "codex"
+    codex_cli_profile: str = "gen"
+    codex_cli_timeout_s: float = 300.0
 
     # Whisper
     whisper_model: str = "kotoba-v2.0"
@@ -57,6 +88,15 @@ class Settings(BaseSettings):
     # Audio
     audio_sample_rate: int = 16000
     audio_channels: int = 1
+    loopback_device_patterns: str = "INZONE H3,Anker PowerConf S330"
+
+    @property
+    def preferred_loopback_patterns(self) -> tuple[str, ...]:
+        return tuple(
+            part.strip()
+            for part in self.loopback_device_patterns.split(",")
+            if part.strip()
+        )
 
     # VAD
     vad_threshold: float = 0.5
@@ -168,6 +208,7 @@ class Settings(BaseSettings):
 
     # Audio saving (transcription continues regardless)
     audio_saving_enabled: bool = True
+    audio_autosave_interval_s: float = 60.0
 
 
 settings = Settings()

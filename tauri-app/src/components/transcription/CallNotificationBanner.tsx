@@ -87,14 +87,14 @@ export default function CallNotificationBanner({ isRunning, onStartWithName }: P
   if (calls.length === 0 || isRunning) return null;
 
   return (
-    <div className="space-y-2 px-4 pt-3">
+    <div className="call-notification-stack">
       {calls.map((call) => (
         <div
           key={call.window_title}
-          className="flex items-center gap-3 p-3 bg-blue-900/40 border border-blue-700/60 rounded-lg animate-in fade-in"
+          className="call-notification"
         >
           {/* Icon */}
-          <div className="shrink-0 text-blue-400">
+          <div className="call-notification__icon">
             {call.call_type === "google_meet" ? (
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -107,11 +107,11 @@ export default function CallNotificationBanner({ isRunning, onStartWithName }: P
           </div>
 
           {/* Text */}
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-blue-200">
+          <div className="call-notification__content">
+            <div className="call-notification__title">
               {call.display_name} を検出しました
             </div>
-            <div className="text-xs text-slate-400 truncate">
+            <div className="call-notification__subtitle">
               {call.session_name_suggestion}
             </div>
           </div>
@@ -119,13 +119,13 @@ export default function CallNotificationBanner({ isRunning, onStartWithName }: P
           {/* Actions */}
           <button
             onClick={() => handleStart(call)}
-            className="shrink-0 px-3 py-1.5 bg-red-600 hover:bg-red-700 rounded text-xs font-medium transition-colors"
+            className="call-notification__start"
           >
             録音開始
           </button>
           <button
             onClick={() => handleDismiss(call)}
-            className="shrink-0 px-2 py-1.5 text-slate-400 hover:text-slate-200 text-xs transition-colors"
+            className="call-notification__dismiss"
           >
             閉じる
           </button>

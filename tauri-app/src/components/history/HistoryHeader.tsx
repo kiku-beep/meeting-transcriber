@@ -1,9 +1,17 @@
 import { useState, useRef, useEffect } from "react";
+import type { TranscriptExportFormat } from "../../lib/apiTranscripts";
+
+const EXPORT_OPTIONS: { format: TranscriptExportFormat; label: string }[] = [
+  { format: "txt", label: "TXT" },
+  { format: "json", label: "JSON" },
+  { format: "md", label: "MD" },
+  { format: "action-md", label: "AIアクション" },
+];
 
 interface Props {
   sessionName: string;
   onBack: () => void;
-  onExport: (format: "txt" | "json" | "md") => void;
+  onExport: (format: TranscriptExportFormat) => void;
   onDelete: () => void;
   onRename: (newName: string) => Promise<void>;
   error: string;
@@ -48,11 +56,11 @@ export default function HistoryHeader({
   };
 
   return (
-    <div className="p-4 border-b border-slate-700 space-y-3 shrink-0">
+    <div className="history-header p-4 space-y-3 shrink-0">
       <div className="flex items-center gap-3">
         <button
           onClick={onBack}
-          className="flex items-center gap-1 px-2 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm transition-colors shrink-0"
+          className="history-header__button flex items-center gap-1 px-2 py-1.5 text-sm shrink-0"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -69,17 +77,17 @@ export default function HistoryHeader({
               if (e.key === "Escape") setEditing(false);
             }}
             onBlur={commitEdit}
-            className="text-lg font-semibold flex-1 min-w-0 bg-slate-700 border border-cyan-500 rounded px-2 py-0.5 focus:outline-none"
+            className="history-header__input text-lg font-semibold flex-1 min-w-0 rounded px-2 py-0.5 focus:outline-none"
           />
         ) : (
           <h2
             onClick={startEdit}
-            className="text-lg font-semibold flex-1 min-w-0 truncate cursor-pointer hover:text-cyan-300 transition-colors group"
+            className="history-header__title text-lg font-semibold flex-1 min-w-0 truncate cursor-pointer group"
             title="クリックで会議名を編集"
           >
             {sessionName}
             <svg
-              className="inline-block ml-2 w-4 h-4 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity"
+              className="history-header__edit-icon inline-block ml-2 w-4 h-4"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -94,49 +102,41 @@ export default function HistoryHeader({
           </h2>
         )}
         <div className="flex gap-1 shrink-0">
-          {(["txt", "json", "md"] as const).map((fmt) => (
+          {EXPORT_OPTIONS.map(({ format, label }) => (
             <button
-              key={fmt}
-              onClick={() => onExport(fmt)}
-              className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs transition-colors"
+              key={format}
+              onClick={() => onExport(format)}
+              className="history-header__button px-2 py-1 text-xs"
             >
-              {fmt.toUpperCase()}
+              {label}
             </button>
           ))}
         </div>
         <button
           onClick={onDelete}
-          className="px-3 py-1.5 bg-red-800 hover:bg-red-700 rounded text-sm transition-colors shrink-0"
+          className="history-header__button history-header__button--danger px-3 py-1.5 text-sm shrink-0"
         >
           削除
         </button>
       </div>
 
       {error && (
-        <div className="p-2 bg-red-900/50 border border-red-700 rounded text-red-300 text-xs flex items-center justify-between">
+        <div className="inline-alert inline-alert--error flex items-center justify-between" role="alert">
           <span>{error}</span>
-          <button onClick={onClearError} className="text-red-400 hover:text-red-300 ml-2 shrink-0">&#x2715;</button>
+          <button onClick={onClearError} className="inline-alert__dismiss ml-2 shrink-0">&#x2715;</button>
         </div>
       )}
 
       <div className="flex gap-2">
         <button
           onClick={() => onSubTabChange("transcript")}
-          className={`px-3 py-1 rounded text-sm ${
-            subTab === "transcript"
-              ? "bg-cyan-600 text-white"
-              : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-          }`}
+          className={`history-header__tab px-3 py-1 text-sm ${subTab === "transcript" ? "history-header__tab--active" : ""}`}
         >
           文字起こし
         </button>
         <button
           onClick={() => onSubTabChange("summary")}
-          className={`px-3 py-1 rounded text-sm ${
-            subTab === "summary"
-              ? "bg-cyan-600 text-white"
-              : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-          }`}
+          className={`history-header__tab px-3 py-1 text-sm ${subTab === "summary" ? "history-header__tab--active" : ""}`}
         >
           要約
         </button>

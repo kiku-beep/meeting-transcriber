@@ -138,11 +138,17 @@ class Transcriber:
         self._loading_stage: str = ""  # "", "unloading", "warming", "loading", "ready"
         self._loading_progress: float = 0.0  # 0.0 - 1.0
         self._cache_warm_thread: threading.Thread | None = None
+        self._model_load_lock = threading.Lock()
+        self._inference_lock = threading.Lock()
         self._runtime_device: str = ""
         self._runtime_compute: str = ""
 
     def load_model(self) -> None:
         """Load the Whisper model."""
+        with self._model_load_lock:
+            self._load_model_once()
+
+    def _load_model_once(self) -> None:
         if self.is_loaded:
             return
 
@@ -151,8 +157,9 @@ class Transcriber:
             self._loading_stage = "loading"
             self._loading_progress = 0.3
             t0 = time.monotonic()
-            self._whisper_cpp = WhisperCppServerBackend(self.model_size)
-            self._whisper_cpp.load_model()
+            whisper_cpp = WhisperCppServerBackend(self.model_size)
+            whisper_cpp.load_model()
+            self._whisper_cpp = whisper_cpp
             elapsed = time.monotonic() - t0
             self._runtime_device = "vulkan"
             self._runtime_compute = "whisper.cpp"
@@ -216,6 +223,10 @@ class Transcriber:
 
     def unload_model(self) -> None:
         """Release the model and free VRAM."""
+        with self._model_load_lock, self._inference_lock:
+            self._unload_model_once()
+
+    def _unload_model_once(self) -> None:
         if self._whisper_cpp is not None:
             self._loading_stage = "unloading"
             self._loading_progress = 0.1
@@ -314,8 +325,12 @@ class Transcriber:
         Returns:
             dict with keys: text, language, confidence
         """
+        with self._inference_lock:
+            return self._transcribe_once(audio, sample_rate)
+
+    def _transcribe_once(self, audio: np.ndarray, sample_rate: int = 16000) -> dict:
         if self._model is None:
-            if self._whisper_cpp is None:
+            if self._whisper_cpp is None or not self._whisper_cpp.is_loaded:
                 raise RuntimeError("Model not loaded. Call load_model() first.")
             return self._whisper_cpp.transcribe(audio, sample_rate)
 
@@ -405,20 +420,22 @@ class Transcriber:
 
     def switch_model(self, new_model_size: str) -> None:
         """Switch to a different Whisper model size."""
-        if new_model_size == self.model_size and self._model is not None:
+        with self._model_load_lock:
+            if new_model_size == self.model_size and self.is_loaded:
+                self._loading_stage = ""
+                return
+
+            # Wait for any background cache warming to complete
+            if self._cache_warm_thread and self._cache_warm_thread.is_alive():
+                self._loading_stage = "warming"
+                self._loading_progress = 0.15
+                self._cache_warm_thread.join(timeout=120)
+
+            with self._inference_lock:
+                self._unload_model_once()
+                self.model_size = new_model_size
+                self._load_model_once()
             self._loading_stage = ""
-            return
-
-        # Wait for any background cache warming to complete
-        if self._cache_warm_thread and self._cache_warm_thread.is_alive():
-            self._loading_stage = "warming"
-            self._loading_progress = 0.15
-            self._cache_warm_thread.join(timeout=120)
-
-        self.unload_model()
-        self.model_size = new_model_size
-        self.load_model()
-        self._loading_stage = ""
 
     @property
     def is_loaded(self) -> bool:

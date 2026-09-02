@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from backend.core.ai_markdown_exporter import build_action_markdown, build_ai_markdown
 from backend.storage.file_store import (
     create_folder,
     delete_folder,
@@ -9,7 +10,7 @@ from backend.storage.file_store import (
     folder_exists,
     list_folders,
     list_sessions,
-    load_summary,
+    load_session_metadata,
     load_transcript,
     load_transcript_text,
     rename_folder,
@@ -147,10 +148,20 @@ async def export_transcript(session_id: str, format: str = "txt"):
         return PlainTextResponse(text, media_type="text/plain; charset=utf-8")
 
     elif format == "md":
-        summary = load_summary(session_id)
-        if summary is None:
-            raise HTTPException(404, "Summary not found for this session")
-        return PlainTextResponse(summary, media_type="text/markdown; charset=utf-8")
+        entries = load_transcript(session_id)
+        if entries is None:
+            raise HTTPException(404, "Session not found")
+        metadata = load_session_metadata(session_id) or {"session_id": session_id}
+        markdown = build_ai_markdown(session_id, entries, metadata)
+        return PlainTextResponse(markdown, media_type="text/markdown; charset=utf-8")
+
+    elif format == "action-md":
+        entries = load_transcript(session_id)
+        if entries is None:
+            raise HTTPException(404, "Session not found")
+        metadata = load_session_metadata(session_id) or {"session_id": session_id}
+        markdown = build_action_markdown(session_id, entries, metadata)
+        return PlainTextResponse(markdown, media_type="text/markdown; charset=utf-8")
 
     else:
         raise HTTPException(400, f"Unsupported format: {format}")

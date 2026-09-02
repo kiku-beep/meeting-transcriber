@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getGpuStatus, getHealth, getAudioDevices } from "../lib/apiHealth";
+import { getGpuStatus, getHealth, getAudioDevices, isBackendConnectionError } from "../lib/apiHealth";
 import { getModelStatus, switchModel, warmModelCache, getModelLoadingStatus } from "../lib/apiSession";
 import { getGeminiModels, setGeminiModel } from "../lib/apiSummary";
 import { getConfigStatus, setTextRefine } from "../lib/apiConfig";
@@ -34,6 +34,7 @@ export default function Settings() {
 
   const refresh = async () => {
     try {
+      setHealth((current) => current || "確認中...");
       const [h, g, d, m, gm, cfg] = await Promise.all([
         getHealth(),
         getGpuStatus(),
@@ -43,6 +44,7 @@ export default function Settings() {
         getConfigStatus(),
       ]);
       setHealth(h.status);
+      setError("");
       setGpu(g);
       setDevices(d.devices);
       setModel(m);
@@ -53,13 +55,34 @@ export default function Settings() {
       setApiKeySet(cfg.gemini_api_key_set);
       setApiKeyMasked(cfg.gemini_api_key_masked);
       setTextRefineEnabled(cfg.text_refine_enabled ?? false);
+      return true;
     } catch (e) {
+      if (isBackendConnectionError(e)) {
+        setHealth("起動待ち");
+        setError("");
+        return false;
+      }
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     }
   };
 
   useEffect(() => {
-    refresh();
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const run = async () => {
+      const ok = await refresh();
+      if (!ok && !cancelled) {
+        timer = setTimeout(run, 5_000);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, []);
 
   const handleSelectedModelChange = (value: string) => {
@@ -135,8 +158,13 @@ export default function Settings() {
   };
 
   return (
-    <div className="p-6 space-y-6 overflow-y-auto h-full">
-      <h2 className="text-lg font-semibold">設定</h2>
+    <div className="workspace-page settings-page overflow-y-auto h-full">
+      <header className="page-heading">
+        <div><p className="workspace-eyebrow">SYSTEM CONTROL</p><h2>設定</h2></div>
+        <span className={`status-chip ${health === "ok" ? "status-chip--ok" : "status-chip--waiting"}`}>
+          {health === "ok" ? "接続済み" : "確認中"}
+        </span>
+      </header>
 
       {error && (
         <div className="p-3 bg-red-900/50 border border-red-700 rounded text-red-300 text-sm flex items-center justify-between">
@@ -190,7 +218,9 @@ export default function Settings() {
         <h3 className="text-sm font-medium text-slate-300">ヘルスチェック</h3>
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${health === "ok" ? "bg-emerald-400" : "bg-red-400"}`} />
-          <span className="text-sm">{health || "確認中..."}</span>
+          <span className="text-sm">
+            {health === "起動待ち" ? "起動待ち..." : health || "確認中..."}
+          </span>
           <button onClick={refresh} className="text-xs text-slate-400 hover:text-slate-200 ml-2">
             更新
           </button>

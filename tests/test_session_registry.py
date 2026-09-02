@@ -72,3 +72,19 @@ def test_connected_empty_idle_client_session_is_not_cleaned(monkeypatch):
 
     session_mod.unregister_client_connection("connected-client")
     assert session_mod.cleanup_empty_idle_client_sessions() == ["connected-client"]
+
+
+def test_model_switch_reservation_blocks_session_start(monkeypatch):
+    reset_registry(monkeypatch)
+    session = session_mod.get_or_create_session("alice")
+
+    assert session_mod.reserve_model_switch() is True
+    try:
+        with pytest.raises(RuntimeError, match="モデル切替中"):
+            session_mod.begin_session_start(session)
+    finally:
+        session_mod.release_model_switch()
+
+    session_mod.begin_session_start(session)
+    assert session.status == SessionStatus.STARTING
+    assert session_mod.reserve_model_switch() is False

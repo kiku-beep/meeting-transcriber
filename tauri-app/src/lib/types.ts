@@ -144,6 +144,49 @@ export interface GpuStatus {
 export interface SummaryUsage {
   total_tokens?: number;
   cost_usd?: number;
+  model?: string;
+  billing?: "api" | "claude-subscription" | "codex-subscription";
+  fallback_from?: string;
+  fallback_reason?: string;
+  fallback_detail?: string;
+  fallback_chain?: string[];
+  fallback_details?: Record<string, string>;
+}
+
+export interface FallbackDiagnostic {
+  provider: string;
+  label: string;
+  detail: string;
+}
+
+const FALLBACK_PROVIDER_LABELS: Record<string, string> = {
+  "claude-code": "Claude",
+  "codex-cli": "Codex",
+  gemini: "Gemini",
+};
+
+export function getFallbackDiagnostics(
+  usage?: SummaryUsage,
+): FallbackDiagnostic[] {
+  if (usage?.fallback_chain?.length && usage.fallback_details) {
+    return usage.fallback_chain.flatMap((provider) => {
+      const detail = usage.fallback_details?.[provider];
+      return detail
+        ? [{
+            provider,
+            label: FALLBACK_PROVIDER_LABELS[provider] ?? provider,
+            detail,
+          }]
+        : [];
+    });
+  }
+  if (!usage?.fallback_detail) return [];
+  const provider = usage.fallback_from ?? "claude-code";
+  return [{
+    provider,
+    label: FALLBACK_PROVIDER_LABELS[provider] ?? provider,
+    detail: usage.fallback_detail,
+  }];
 }
 
 export interface SummaryResult {
@@ -166,6 +209,38 @@ export interface GeminiModelInfo {
 export interface GeminiModelsResponse {
   current_model: string;
   models: GeminiModelInfo[];
+}
+
+export type LiveAiMode = "summary" | "question";
+
+export interface LiveAiRequest {
+  client_id: string;
+  mode: LiveAiMode;
+  range_minutes: number | null;
+  question?: string | null;
+}
+
+export interface LiveAiResult {
+  content: string;
+  mode: LiveAiMode;
+  range_minutes: number | null;
+  range_start_seconds: number;
+  range_end_seconds: number;
+  generated_at: string;
+  entry_count: number;
+  usage: SummaryUsage;
+}
+
+export interface SummaryEngineInfo {
+  id: string;
+  label: string;
+  description: string;
+  billing: "auto" | "api" | "claude-subscription" | "codex-subscription";
+}
+
+export interface SummaryEnginesResponse {
+  current_engine: string;
+  engines: SummaryEngineInfo[];
 }
 
 // --- Transcript Sessions ---

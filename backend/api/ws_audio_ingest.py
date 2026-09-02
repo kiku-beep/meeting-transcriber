@@ -25,6 +25,7 @@ from starlette.websockets import WebSocketState
 from backend.config import settings
 from backend.core.segmentation_refiner import should_run_segmentation_refinement
 from backend.models.session import (
+    begin_session_start,
     ensure_session_capacity,
     get_or_create_session,
     get_session,
@@ -177,7 +178,7 @@ async def _start_server_session(
     """Start a transcription session in server mode (no local audio devices)."""
     from datetime import datetime
 
-    session.status = SessionStatus.STARTING
+    begin_session_start(session)
     session.session_id = datetime.now().strftime("%Y-%m-%d_%H%M%S") + f"_{client_id}"
     session.session_name = session_name
     session.started_at = datetime.now()
@@ -190,20 +191,7 @@ async def _start_server_session(
     session._recorded_loopback.clear()
     session._stop_event.clear()
 
-    # Load models if needed
-    if not session._transcriber.is_loaded or not session._diarizer.is_loaded:
-        logger.info("Loading models for client %s...", client_id)
-        session._mic_buffer.load_model()
-        loop = asyncio.get_event_loop()
-        loads = [
-            loop.run_in_executor(None, session._transcriber.load_model),
-            loop.run_in_executor(None, session._diarizer.load_model),
-        ]
-        if should_run_segmentation_refinement() and not session._refiner.is_loaded:
-            loads.append(loop.run_in_executor(None, session._refiner.load_model))
-        await asyncio.gather(*loads)
-    else:
-        session._mic_buffer.load_model()
+    await session._ensure_models_loaded()
 
     session._transcriber.build_vocab_hints()
 
@@ -237,6 +225,7 @@ async def _start_server_session(
 
     # Arm text refinement for a final pass when the session stops.
     session._text_refiner.start(session.entries)
+    session._start_audio_autosave()
 
     session.status = SessionStatus.RUNNING
     logger.info("Server-mode session %s started for client %s", session.session_id, client_id)

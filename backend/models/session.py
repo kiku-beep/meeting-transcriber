@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from datetime import datetime
 
 import numpy as np
 
 from backend.config import settings
 from backend.core.audio_buffer import AudioBuffer
-from backend.core.diarizer import Diarizer
+from backend.core.model_runtime import ModelRuntime, get_model_runtime
 from backend.core.speaker_cluster import SessionClusterManager
-from backend.core.transcriber import Transcriber
 from backend.models.audio_stream import AudioStreamManager
 from backend.models.pipeline import TranscriptionPipeline
 from backend.models.schemas import SessionStatus, TranscriptEntry
 from backend.storage.file_store import save_session
-from backend.core.segmentation_refiner import SegmentationRefiner, should_run_segmentation_refinement
+from backend.core.segmentation_refiner import should_run_segmentation_refinement
 from backend.core.text_refiner import TextRefiner
 from backend.storage.dictionary_store import get_dictionary_store
 from backend.storage.speaker_store import get_speaker_store
@@ -60,7 +60,8 @@ def compute_sample_quality(
 class TranscriptionSession:
     """Facade — owns session state and delegates audio/pipeline work."""
 
-    def __init__(self):
+    def __init__(self, model_runtime: ModelRuntime | None = None):
+        self._model_runtime = model_runtime or get_model_runtime()
         self.session_id: str = ""
         self.session_name: str = ""
         self.status: SessionStatus = SessionStatus.IDLE
@@ -69,8 +70,8 @@ class TranscriptionSession:
 
         self._mic_buffer = AudioBuffer()
         self._loopback_buffer = AudioBuffer()
-        self._transcriber = Transcriber()
-        self._diarizer = Diarizer()
+        self._transcriber = self._model_runtime.transcriber
+        self._diarizer = self._model_runtime.create_diarizer()
         self._cluster_manager = SessionClusterManager()
         self._new_entry_event = asyncio.Event()
         self._entry_embeddings: dict[str, np.ndarray] = {}
@@ -79,6 +80,8 @@ class TranscriptionSession:
         self._recorded_audio: list[np.ndarray] = []
         self._recorded_audio_raw: list[np.ndarray] = []
         self._recorded_loopback: list[np.ndarray] = []
+        self._audio_autosave_task: asyncio.Task | None = None
+        self._audio_save_lock = threading.Lock()
 
         self._audio = AudioStreamManager()
         self._audio.setup(
@@ -96,11 +99,12 @@ class TranscriptionSession:
             self._new_entry_event, self._stop_event,
         )
         self._pipeline_task: asyncio.Task | None = None
-        self._refiner = SegmentationRefiner()
+        self._refiner = self._model_runtime.create_segmentation_refiner()
         self._refiner_task: asyncio.Task | None = None
         self._text_refiner = TextRefiner(settings, get_dictionary_store())
         self._text_refiner_task: asyncio.Task | None = None
         self._has_loopback: bool = False
+        self._automatic_loopback_devices: bool = True
 
         self._device_monitor_task: asyncio.Task | None = None
         self._device_watcher = None  # Initialized on first start
@@ -131,10 +135,7 @@ class TranscriptionSession:
                     loopback_device_index: int | None = None,
                     session_name: str = "") -> None:
         """Start a transcription session."""
-        if self.status != SessionStatus.IDLE:
-            raise RuntimeError(f"Cannot start session in {self.status} state")
-
-        self.status = SessionStatus.STARTING
+        begin_session_start(self)
         self.session_id = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         self.session_name = session_name
         self.started_at = datetime.now()
@@ -149,37 +150,21 @@ class TranscriptionSession:
         self._audio.reset_counters()
 
         try:
-            if not self._transcriber.is_loaded or not self._diarizer.is_loaded:
-                logger.info("Loading models...")
-                self._mic_buffer.load_model()
-                loop = asyncio.get_event_loop()
-                loads = [
-                    loop.run_in_executor(None, self._transcriber.load_model),
-                    loop.run_in_executor(None, self._diarizer.load_model),
-                ]
-                if should_run_segmentation_refinement() and not self._refiner.is_loaded:
-                    loads.append(loop.run_in_executor(None, self._refiner.load_model))
-                await asyncio.gather(*loads)
-            else:
-                self._mic_buffer.load_model()
+            await self._ensure_models_loaded()
 
             self._transcriber.build_vocab_hints()
 
-            # Auto-detect devices from Windows defaults if not specified
-            if device_index is None and loopback_device_index is None:
-                from backend.core.audio_capture import get_default_microphone, get_default_loopback
-                default_mic = get_default_microphone()
-                default_lb = get_default_loopback()
-                if default_mic:
-                    device_index = default_mic.index
-                if default_lb:
-                    loopback_device_index = default_lb.index
+            device_index, loopback_indices, automatic = self._resolve_start_devices(
+                device_index,
+                loopback_device_index,
+            )
+            self._automatic_loopback_devices = automatic
 
             self._audio.open_mic_stream(device_index)
-            self._has_loopback = loopback_device_index is not None
+            opened_loopbacks = self._audio.open_loopback_streams(loopback_indices)
+            self._has_loopback = bool(opened_loopbacks)
             if self._has_loopback:
                 self._loopback_buffer.load_model()
-                self._audio.open_loopback_stream(loopback_device_index)
 
             self._mic_buffer.start_session()
             if self._has_loopback:
@@ -206,6 +191,7 @@ class TranscriptionSession:
 
             # Start text refinement (Pass 2 — Gemini Flash)
             self._text_refiner.start(self.entries)
+            self._start_audio_autosave()
 
             self.status = SessionStatus.RUNNING
 
@@ -228,6 +214,54 @@ class TranscriptionSession:
             logger.exception("Failed to start session")
             raise
 
+    def _resolve_start_devices(
+        self,
+        device_index: int | None,
+        loopback_device_index: int | None,
+    ) -> tuple[int | None, list[int], bool]:
+        from backend.core.audio_capture import get_default_microphone
+
+        if device_index is None:
+            default_mic = get_default_microphone()
+            if default_mic:
+                device_index = default_mic.index
+
+        automatic = loopback_device_index is None
+        if automatic:
+            loopback_indices = self._resolve_automatic_loopback_indices()
+        else:
+            loopback_indices = [loopback_device_index]
+
+        return device_index, loopback_indices, automatic
+
+    def _resolve_automatic_loopback_indices(self) -> list[int]:
+        from backend.core.audio_capture import (
+            get_default_loopback,
+            get_preferred_loopbacks,
+        )
+
+        preferred = get_preferred_loopbacks(settings.preferred_loopback_patterns)
+        if preferred:
+            return [device.index for device in preferred]
+
+        default_loopback = get_default_loopback()
+        return [default_loopback.index] if default_loopback else []
+
+    async def _ensure_models_loaded(self) -> None:
+        """Load every model required by the current runtime configuration."""
+        self._mic_buffer.load_model()
+        loop = asyncio.get_event_loop()
+        loads = []
+        if not self._transcriber.is_loaded:
+            loads.append(loop.run_in_executor(None, self._transcriber.load_model))
+        if not self._diarizer.is_loaded:
+            loads.append(loop.run_in_executor(None, self._diarizer.load_model))
+        if should_run_segmentation_refinement() and not self._refiner.is_loaded:
+            loads.append(loop.run_in_executor(None, self._refiner.load_model))
+        if loads:
+            logger.info("Loading %d session model component(s)...", len(loads))
+            await asyncio.gather(*loads)
+
     async def stop(self) -> None:
         """Stop the current session."""
         if self.status not in (SessionStatus.RUNNING, SessionStatus.PAUSED):
@@ -246,6 +280,7 @@ class TranscriptionSession:
             logger.warning("Failed to stop screen capture", exc_info=True)
 
         self._stop_event.set()
+        await self._stop_audio_autosave()
 
         self._audio.close_streams()
 
@@ -284,10 +319,10 @@ class TranscriptionSession:
         }
         save_session(self.session_id, self.entries, meta)
 
-        if self._recorded_audio and settings.audio_saving_enabled:
+        if self._has_recorded_audio() and settings.audio_saving_enabled:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._save_audio)
-        elif self._recorded_audio:
+        elif self._has_recorded_audio():
             logger.info("Audio saving disabled — skipping WAV save")
             self._recorded_audio.clear()
             self._recorded_audio_raw.clear()
@@ -330,6 +365,7 @@ class TranscriptionSession:
             logger.warning("Failed to stop screen capture", exc_info=True)
 
         self._stop_event.set()
+        await self._stop_audio_autosave()
         self._audio.close_streams()
 
         # Cancel pipeline immediately (no drain needed)
@@ -359,6 +395,56 @@ class TranscriptionSession:
 
         self.status = SessionStatus.IDLE
         logger.info("Session %s discarded.", self.session_id)
+
+    def _has_recorded_audio(self) -> bool:
+        return bool(
+            self._recorded_audio_raw
+            or self._recorded_audio
+            or self._recorded_loopback
+        )
+
+    def _start_audio_autosave(self) -> None:
+        if not settings.audio_saving_enabled:
+            return
+        if self._audio_autosave_task and not self._audio_autosave_task.done():
+            return
+        self._audio_autosave_task = asyncio.create_task(self._audio_autosave_loop())
+
+    async def _stop_audio_autosave(self) -> None:
+        task = self._audio_autosave_task
+        self._audio_autosave_task = None
+        if not task or task.done():
+            return
+        try:
+            await asyncio.wait_for(task, timeout=10.0)
+        except asyncio.CancelledError:
+            pass
+        except asyncio.TimeoutError:
+            logger.warning("Audio autosave task did not stop promptly; cancelling")
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        except Exception:
+            logger.warning("Audio autosave task failed", exc_info=True)
+
+    async def _audio_autosave_loop(self) -> None:
+        interval = max(10.0, float(settings.audio_autosave_interval_s))
+        loop = asyncio.get_event_loop()
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
+                break
+            except asyncio.TimeoutError:
+                pass
+
+            if (
+                self.status == SessionStatus.RUNNING
+                and settings.audio_saving_enabled
+                and self._has_recorded_audio()
+            ):
+                await loop.run_in_executor(None, self._save_audio, False)
 
     async def pause(self) -> None:
         """Toggle pause/resume."""
@@ -652,7 +738,7 @@ class TranscriptionSession:
                 elif manifest_path.exists():
                     manifest_path.unlink()
 
-    def _save_audio(self) -> None:
+    def _save_audio(self, clear_buffers: bool = True) -> None:
         """Concatenate recorded audio chunks and save as WAV.
 
         Mic and loopback audio are stored in separate lists, then mixed
@@ -662,59 +748,98 @@ class TranscriptionSession:
         import soundfile as sf
 
         try:
-            session_dir = settings.sessions_dir / self.session_id
-            session_dir.mkdir(parents=True, exist_ok=True)
-            wav_path = session_dir / "recording.wav"
+            with self._audio_save_lock:
+                session_dir = settings.sessions_dir / self.session_id
+                session_dir.mkdir(parents=True, exist_ok=True)
+                wav_path = session_dir / "recording.wav"
+                tmp_path = session_dir / "recording.tmp.wav"
 
-            # Build mic audio
-            if self._recorded_audio_raw:
-                raw = np.concatenate(self._recorded_audio_raw)
-                source_rate = self._audio._raw_sample_rate
-                if source_rate != 16000:
-                    from math import gcd
-                    from scipy.signal import resample_poly
-                    g = gcd(16000, source_rate)
-                    mic_audio = resample_poly(raw, 16000 // g, source_rate // g).astype(np.float32)
-                else:
-                    mic_audio = raw
-                logger.info("Mic audio: bulk-resampled %dHz→16kHz (%d samples)", source_rate, len(mic_audio))
-            elif self._recorded_audio:
-                mic_audio = np.concatenate(self._recorded_audio)
-            else:
-                return
+                raw_chunks = list(self._recorded_audio_raw)
+                mic_chunks = list(self._recorded_audio)
+                loopback_chunks = list(self._recorded_loopback)
+                audio = self._build_recording_audio(
+                    raw_chunks, mic_chunks, loopback_chunks
+                )
+                if audio is None:
+                    return
 
-            # Mix in loopback audio if available
-            if self._recorded_loopback:
-                loopback_audio = np.concatenate(self._recorded_loopback)
-                # Align lengths: pad shorter to match longer
-                mic_len = len(mic_audio)
-                lb_len = len(loopback_audio)
-                if mic_len > lb_len:
-                    loopback_audio = np.pad(loopback_audio, (0, mic_len - lb_len))
-                elif lb_len > mic_len:
-                    mic_audio = np.pad(mic_audio, (0, lb_len - mic_len))
-                audio = mic_audio + loopback_audio
-                logger.info("Mixed mic (%d) + loopback (%d) samples", mic_len, lb_len)
-            else:
-                audio = mic_audio
-
-            # Normalize to [-1, 1] range for PCM_16
-            peak = float(np.max(np.abs(audio)))
-            if peak > 1.0:
-                audio = audio / peak
-
-            sf.write(str(wav_path), audio, 16000, subtype="PCM_16")
-            duration = len(audio) / 16000
-            logger.info(
-                "Audio saved: %s (%.1fs, %.1f MB, PCM_16)",
-                wav_path, duration, wav_path.stat().st_size / (1024 * 1024),
-            )
+                sf.write(str(tmp_path), audio, 16000, subtype="PCM_16", format="WAV")
+                tmp_path.replace(wav_path)
+                duration = len(audio) / 16000
+                logger.info(
+                    "%s: %s (%.1fs, %.1f MB, PCM_16)",
+                    "Audio saved" if clear_buffers else "Audio autosaved",
+                    wav_path,
+                    duration,
+                    wav_path.stat().st_size / (1024 * 1024),
+                )
         except Exception:
             logger.exception("Failed to save audio recording")
         finally:
-            self._recorded_audio.clear()
-            self._recorded_audio_raw.clear()
-            self._recorded_loopback.clear()
+            if clear_buffers:
+                self._recorded_audio.clear()
+                self._recorded_audio_raw.clear()
+                self._recorded_loopback.clear()
+
+    def _build_recording_audio(
+        self,
+        raw_chunks: list[np.ndarray],
+        mic_chunks: list[np.ndarray],
+        loopback_chunks: list[np.ndarray],
+    ) -> np.ndarray | None:
+        mic_audio = None
+
+        if raw_chunks:
+            raw = np.concatenate(raw_chunks)
+            source_rate = getattr(self._audio, "_raw_sample_rate", 16000) or 16000
+            if source_rate != 16000:
+                from math import gcd
+                from scipy.signal import resample_poly
+
+                g = gcd(16000, source_rate)
+                mic_audio = resample_poly(
+                    raw, 16000 // g, source_rate // g
+                ).astype(np.float32)
+            else:
+                mic_audio = raw.astype(np.float32, copy=False)
+            logger.info(
+                "Mic audio: bulk-resampled %dHz->16kHz (%d samples)",
+                source_rate,
+                len(mic_audio),
+            )
+        elif mic_chunks:
+            mic_audio = np.concatenate(mic_chunks).astype(np.float32, copy=False)
+
+        loopback_audio = None
+        if loopback_chunks:
+            loopback_audio = np.concatenate(loopback_chunks).astype(
+                np.float32, copy=False
+            )
+
+        if mic_audio is None and loopback_audio is None:
+            return None
+        if mic_audio is None:
+            audio = loopback_audio
+            logger.info("Saving loopback-only audio (%d samples)", len(audio))
+        elif loopback_audio is None:
+            audio = mic_audio
+        else:
+            mic_len = len(mic_audio)
+            lb_len = len(loopback_audio)
+            if mic_len > lb_len:
+                loopback_audio = np.pad(loopback_audio, (0, mic_len - lb_len))
+            elif lb_len > mic_len:
+                mic_audio = np.pad(mic_audio, (0, lb_len - mic_len))
+            audio = mic_audio + loopback_audio
+            logger.info("Mixed mic (%d) + loopback (%d) samples", mic_len, lb_len)
+
+        if audio is None or len(audio) == 0:
+            return None
+
+        peak = float(np.max(np.abs(audio)))
+        if peak > 1.0:
+            audio = audio / peak
+        return audio.astype(np.float32, copy=False)
 
     def _save_speaker_samples(self, store, speaker_id: str,
                                source_entry: TranscriptEntry,
@@ -857,6 +982,59 @@ class TranscriptionSession:
             logger.info("Falling back to polling device monitor")
             self._device_monitor_task = asyncio.create_task(self._monitor_devices())
 
+    def _set_loopback_availability(self, available: bool) -> None:
+        if available == self._has_loopback:
+            return
+
+        self._has_loopback = available
+        if available:
+            self._loopback_buffer.load_model()
+            self._loopback_buffer.start_session()
+
+        if self.status in (SessionStatus.RUNNING, SessionStatus.PAUSED):
+            self._pipeline.configure(
+                self.session_id,
+                self.session_name,
+                self.started_at,
+                available,
+            )
+
+    async def _sync_automatic_loopback_devices(
+        self,
+        *,
+        recreate_audio: bool = False,
+    ) -> list[int]:
+        if not self._automatic_loopback_devices:
+            return list(self._audio.current_loopback_indices)
+
+        loopback_indices = self._resolve_automatic_loopback_indices()
+        loop = asyncio.get_running_loop()
+
+        if recreate_audio:
+            from backend.core.audio_capture import get_default_microphone
+
+            default_mic = get_default_microphone()
+            mic_index = (
+                default_mic.index
+                if default_mic
+                else self._audio.current_mic_index
+            )
+            opened = await loop.run_in_executor(
+                None,
+                self._audio.reopen_devices,
+                mic_index,
+                loopback_indices,
+            )
+        else:
+            opened = await loop.run_in_executor(
+                None,
+                self._audio.sync_loopback_streams,
+                loopback_indices,
+            )
+
+        self._set_loopback_availability(bool(opened))
+        return opened
+
     def _stop_device_watcher(self) -> None:
         """Stop device watcher and polling fallback."""
         if self._device_watcher:
@@ -870,18 +1048,17 @@ class TranscriptionSession:
         if self.status not in (SessionStatus.RUNNING, SessionStatus.PAUSED):
             return
 
-        from backend.core.audio_capture import get_default_microphone, get_default_loopback
+        from backend.core.audio_capture import get_default_microphone
 
         try:
-            if event.event_type == "removed" or event.event_type == "added":
-                # Device list changed — recreate PyAudio to refresh indices
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self._audio._recreate_pyaudio)
+            if event.event_type in ("removed", "added"):
+                if self._automatic_loopback_devices:
+                    await self._sync_automatic_loopback_devices(
+                        recreate_audio=True,
+                    )
+                return
 
             new_mic = get_default_microphone()
-            new_lb = get_default_loopback()
-
-            # Switch mic if default changed
             if new_mic and new_mic.index != self._audio.current_mic_index:
                 logger.info(
                     "Device event → mic switch: %s -> %s",
@@ -890,33 +1067,14 @@ class TranscriptionSession:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, self._audio.switch_mic, new_mic.index)
 
-            # Switch loopback if default output changed
-            if new_lb and new_lb.index != self._audio.current_loopback_index:
-                logger.info(
-                    "Device event → loopback switch: %s -> %s",
-                    self._audio.current_loopback_name, new_lb.name,
-                )
-                if not self._has_loopback:
-                    self._loopback_buffer.load_model()
-                    self._loopback_buffer.start_session()
-                    self._has_loopback = True
-                    self._pipeline.configure(
-                        self.session_id, self.session_name,
-                        self.started_at, True,
-                    )
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self._audio.switch_loopback, new_lb.index)
-            elif new_lb is None and self._audio.current_loopback_index is not None:
-                logger.info("Device event → loopback gone, closing")
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self._audio.switch_loopback, None)
+            await self._sync_automatic_loopback_devices()
 
         except Exception:
             logger.warning("Device change handler failed", exc_info=True)
 
     async def _monitor_devices(self) -> None:
         """Background task: polling fallback when COM is unavailable."""
-        from backend.core.audio_capture import get_default_microphone, get_default_loopback
+        from backend.core.audio_capture import get_default_microphone
 
         POLL_INTERVAL = 3.0
         logger.info("Device monitor started (poll every %.0fs)", POLL_INTERVAL)
@@ -929,9 +1087,7 @@ class TranscriptionSession:
 
                 try:
                     new_mic = get_default_microphone()
-                    new_lb = get_default_loopback()
 
-                    # Switch mic if default changed
                     if new_mic and new_mic.index != self._audio.current_mic_index:
                         logger.info(
                             "Default mic changed: %s -> %s",
@@ -942,30 +1098,7 @@ class TranscriptionSession:
                             None, self._audio.switch_mic, new_mic.index
                         )
 
-                    # Switch loopback if default output changed
-                    if new_lb and new_lb.index != self._audio.current_loopback_index:
-                        logger.info(
-                            "Default loopback changed: %s -> %s",
-                            self._audio.current_loopback_name, new_lb.name,
-                        )
-                        if not self._has_loopback:
-                            self._loopback_buffer.load_model()
-                            self._loopback_buffer.start_session()
-                            self._has_loopback = True
-                            self._pipeline.configure(
-                                self.session_id, self.session_name,
-                                self.started_at, True,
-                            )
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(
-                            None, self._audio.switch_loopback, new_lb.index
-                        )
-                    elif new_lb is None and self._audio.current_loopback_index is not None:
-                        logger.info("Default loopback gone, closing loopback stream")
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(
-                            None, self._audio.switch_loopback, None
-                        )
+                    await self._sync_automatic_loopback_devices()
 
                 except Exception:
                     logger.warning("Device monitor check failed", exc_info=True)
@@ -978,6 +1111,8 @@ class TranscriptionSession:
 # ── Session Registry (multi-client support) ──────────────────────
 _sessions: dict[str, TranscriptionSession] = {}
 _client_connections: dict[str, int] = {}
+_model_lifecycle_lock = threading.Lock()
+_model_switch_reserved = False
 _default_session = TranscriptionSession()
 _sessions["default"] = _default_session
 
@@ -1012,6 +1147,43 @@ def active_session_count() -> int:
         for cid, session in _sessions.items()
         if cid != "default" and session.status in active_statuses
     )
+
+
+def has_active_sessions() -> bool:
+    """Return whether any local or remote session is using shared models."""
+    active_statuses = {
+        SessionStatus.STARTING,
+        SessionStatus.RUNNING,
+        SessionStatus.PAUSED,
+        SessionStatus.STOPPING,
+    }
+    return any(session.status in active_statuses for session in _sessions.values())
+
+
+def begin_session_start(session: TranscriptionSession) -> None:
+    """Atomically enter STARTING unless a global model switch is reserved."""
+    with _model_lifecycle_lock:
+        if _model_switch_reserved:
+            raise RuntimeError("モデル切替中は録音を開始できません")
+        if session.status != SessionStatus.IDLE:
+            raise RuntimeError(f"Cannot start session in {session.status} state")
+        session.status = SessionStatus.STARTING
+
+
+def reserve_model_switch() -> bool:
+    """Reserve global model switching only while every session is idle."""
+    global _model_switch_reserved
+    with _model_lifecycle_lock:
+        if _model_switch_reserved or has_active_sessions():
+            return False
+        _model_switch_reserved = True
+        return True
+
+
+def release_model_switch() -> None:
+    global _model_switch_reserved
+    with _model_lifecycle_lock:
+        _model_switch_reserved = False
 
 
 def client_session_count() -> int:

@@ -1,22 +1,71 @@
 """Summary generation and retrieval API routes."""
 
 import traceback
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.config import settings
-from backend.core.summarizer import GEMINI_MODELS, generate_summary
+from backend.config import settings, update_env_file
+from backend.core.summarizer import GEMINI_MODELS, SUMMARY_ENGINES, generate_summary
+from backend.core.live_ai import generate_live_ai, select_live_entries
+from backend.models.session import get_or_create_session, get_session
 from backend.storage.file_store import (
     load_summary, load_transcript, save_summary, update_session_name, list_sessions,
 )
 
 router = APIRouter(prefix="/api/summary", tags=["summary"])
+_live_ai_busy_clients: set[str] = set()
 
 
 class GenerateRequest(BaseModel):
     session_id: str
     force_regenerate: bool = False  # デフォルトはキャッシュ優先
+
+
+class LiveAiRequest(BaseModel):
+    client_id: str = "default"
+    mode: str
+    range_minutes: int | None = None
+    question: str | None = None
+
+
+@router.post("/live")
+async def generate_live(req: LiveAiRequest):
+    """Generate a snapshot-based summary or answer for a running session."""
+    client_id = req.client_id.strip() or "default"
+    if client_id in _live_ai_busy_clients:
+        raise HTTPException(409, "AI処理を実行中です")
+    if req.mode == "question" and not (req.question or "").strip():
+        raise HTTPException(400, "質問を入力してください")
+
+    session = get_session() if client_id == "default" else get_or_create_session(client_id)
+    entries = [entry.model_dump() for entry in session.entries]
+    try:
+        selected, range_start, range_end = select_live_entries(entries, req.range_minutes)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    _live_ai_busy_clients.add(client_id)
+    try:
+        result = await generate_live_ai(selected, req.mode, req.question)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"AI処理に失敗しました: {exc}") from exc
+    finally:
+        _live_ai_busy_clients.discard(client_id)
+
+    return {
+        "content": result["content"],
+        "mode": req.mode,
+        "range_minutes": req.range_minutes,
+        "range_start_seconds": range_start,
+        "range_end_seconds": range_end,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "entry_count": len(selected),
+        "usage": result.get("usage", {}),
+    }
 
 
 @router.post("/generate")
@@ -128,6 +177,37 @@ async def set_model(req: SetModelRequest):
         raise HTTPException(400, f"不明なモデル: {req.model_id}")
     settings.gemini_model = req.model_id
     return {"current_model": settings.gemini_model}
+
+
+@router.get("/engines")
+async def get_engines():
+    """Get available summary engines."""
+    engines = []
+    for engine_id, info in SUMMARY_ENGINES.items():
+        engines.append({
+            "id": engine_id,
+            "label": info["label"],
+            "description": info["description"],
+            "billing": info["billing"],
+        })
+    return {
+        "current_engine": settings.summary_engine,
+        "engines": engines,
+    }
+
+
+class SetEngineRequest(BaseModel):
+    engine_id: str
+
+
+@router.put("/engine")
+async def set_engine(req: SetEngineRequest):
+    """Change the active summary engine."""
+    if req.engine_id not in SUMMARY_ENGINES:
+        raise HTTPException(400, f"不明な要約エンジン: {req.engine_id}")
+    settings.summary_engine = req.engine_id
+    update_env_file("SUMMARY_ENGINE", req.engine_id)
+    return {"current_engine": settings.summary_engine}
 
 
 @router.get("/{session_id}")

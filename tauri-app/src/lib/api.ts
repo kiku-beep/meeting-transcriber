@@ -7,6 +7,13 @@ const CLIENT_ID_STORAGE_KEY = "transcriber_client_id";
 export const CONNECTION_CONFIG_CHANGED = "transcriber:connection-config-changed";
 const DEFAULT_URL = "http://127.0.0.1:8000";
 
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 function getDefaultServerUrl(): string {
   return sanitizeServerUrl(import.meta.env.VITE_BACKEND_URL || DEFAULT_URL);
 }
@@ -155,7 +162,7 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(body.detail || `HTTP ${res.status}`);
+    throw new ApiError(res.status, body.detail || `HTTP ${res.status}`);
   }
   return res.json();
 }
@@ -165,7 +172,7 @@ export async function apiFetchText(path: string): Promise<string> {
   const headers: Record<string, string> = {};
   if (_authToken) headers["Authorization"] = `Bearer ${_authToken}`;
   const res = await httpFetch(`${getBaseUrl()}${requestPath}`, { headers });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
   return res.text();
 }
 
@@ -180,7 +187,7 @@ export async function apiUpload<T>(path: string, formData: FormData): Promise<T>
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(body.detail || `HTTP ${res.status}`);
+    throw new ApiError(res.status, body.detail || `HTTP ${res.status}`);
   }
   return res.json();
 }

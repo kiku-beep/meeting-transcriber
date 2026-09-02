@@ -1,11 +1,5 @@
 import { useState, useRef, useEffect } from "react";
 import type { Speaker } from "../../lib/types";
-import { getSavedSpeakerColor, saveSpeakerColor, getDefaultSpeakerColor, SPEAKER_COLOR_OPTIONS } from "../../lib/speakerColors";
-
-function getSpeakerColor(speakerName: string, speakerId: string): string {
-  if (speakerId === "unknown") return "text-slate-400";
-  return getSavedSpeakerColor(speakerName) ?? getDefaultSpeakerColor(speakerName);
-}
 
 function getConfidenceDot(confidence: number): { color: string; label: string } {
   if (confidence >= 0.75) return { color: "bg-emerald-500", label: `信頼度: ${confidence.toFixed(2)}` };
@@ -36,17 +30,10 @@ export default function EntrySpeaker({ speakerName, speakerId, speakerConfidence
   const [pendingSpeaker, setPendingSpeaker] = useState<{ name: string; id: string } | null>(null);
   const [registeringNew, setRegisteringNew] = useState(false);
   const [newSpeakerName, setNewSpeakerName] = useState("");
-  const [showColorPicker, setShowColorPicker] = useState(false);
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
-  const [currentColor, setCurrentColor] = useState(() => getSpeakerColor(speakerName, speakerId));
   const speakerMenuRef = useRef<HTMLDivElement>(null);
   const clusterInputRef = useRef<HTMLInputElement>(null);
   const newSpeakerInputRef = useRef<HTMLInputElement>(null);
-
-  // Update color when speakerName changes
-  useEffect(() => {
-    setCurrentColor(getSpeakerColor(speakerName, speakerId));
-  }, [speakerName, speakerId]);
 
   // Close speaker menu / scope selection on outside click
   useEffect(() => {
@@ -57,7 +44,6 @@ export default function EntrySpeaker({ speakerName, speakerId, speakerConfidence
         setPendingSpeaker(null);
         setNamingCluster(false);
         setRegisteringNew(false);
-        setShowColorPicker(false);
       }
     };
     document.addEventListener("mousedown", handler);
@@ -82,7 +68,6 @@ export default function EntrySpeaker({ speakerName, speakerId, speakerConfidence
     if (!onEditSpeaker || !speakers) return;
     setShowSpeakerMenu(true);
     setRegisteringNew(false);
-    setShowColorPicker(false);
   };
 
   const handleSpeakerSelect = async (name: string, id: string) => {
@@ -152,18 +137,11 @@ export default function EntrySpeaker({ speakerName, speakerId, speakerConfidence
     }
   };
 
-  const handleColorSelect = (colorClass: string) => {
-    saveSpeakerColor(speakerName, colorClass);
-    setCurrentColor(colorClass);
-    setShowColorPicker(false);
-    setShowSpeakerMenu(false);
-  };
-
   return (
     <span className="shrink-0 min-w-[5rem] relative" ref={speakerMenuRef}>
       <span className="inline-flex items-center gap-1">
         <span
-          className={`font-medium ${currentColor} ${onEditSpeaker ? "cursor-pointer hover:underline" : ""}`}
+          className={`font-medium text-slate-900 ${onEditSpeaker ? "cursor-pointer hover:underline" : ""}`}
           onClick={handleSpeakerClick}
           title={onEditSpeaker ? "クリックで話者変更" : undefined}
         >
@@ -180,14 +158,14 @@ export default function EntrySpeaker({ speakerName, speakerId, speakerConfidence
               onClick={async () => {
                 await onConfirmSuggestion(clusterId, suggestedSpeakerId, suggestedSpeakerName);
               }}
-              className="text-xs px-1.5 py-0 rounded bg-cyan-800/60 hover:bg-cyan-700/80 text-cyan-300 border border-cyan-600/50"
+              className="entry-speaker__suggestion text-xs px-1.5 py-0 rounded"
               title={`${suggestedSpeakerName} として確定`}
             >
               → {suggestedSpeakerName}?
             </button>
             <button
               onClick={() => setSuggestionDismissed(true)}
-              className="text-xs text-slate-500 hover:text-slate-300 px-0.5"
+              className="entry-speaker__suggestion-dismiss text-xs px-0.5"
               title="却下"
             >
               ×
@@ -198,7 +176,7 @@ export default function EntrySpeaker({ speakerName, speakerId, speakerConfidence
 
       {/* Speaker dropdown */}
       {showSpeakerMenu && speakers && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-slate-700 border border-slate-600 rounded shadow-lg py-1 min-w-[8rem]">
+        <div className="speaker-menu absolute top-full left-0 mt-1 z-50 bg-slate-700 border border-slate-600 rounded shadow-lg py-1 min-w-[8rem]">
           {speakers.map((s) => (
             <button
               key={s.id}
@@ -264,37 +242,6 @@ export default function EntrySpeaker({ speakerName, speakerId, speakerConfidence
             </>
           )}
 
-          {/* Color picker */}
-          {speakerId !== "unknown" && (
-            <>
-              <div className="border-t border-slate-600 my-1" />
-              {!showColorPicker ? (
-                <button
-                  onClick={() => setShowColorPicker(true)}
-                  className="block w-full text-left px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-600"
-                >
-                  色を変更...
-                </button>
-              ) : (
-                <div className="px-2 py-1.5">
-                  <div className="grid grid-cols-6 gap-1">
-                    {SPEAKER_COLOR_OPTIONS.map((c) => (
-                      <button
-                        key={c.class}
-                        onClick={() => handleColorSelect(c.class)}
-                        className={`w-5 h-5 rounded-full border-2 ${
-                          currentColor === c.class ? "border-white" : "border-transparent"
-                        } hover:border-slate-300`}
-                        style={{ backgroundColor: c.hex }}
-                        title={c.name}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-
           {/* Cluster naming trigger */}
           {clusterId && onNameCluster && (
             <>
@@ -312,7 +259,7 @@ export default function EntrySpeaker({ speakerName, speakerId, speakerConfidence
 
       {/* Scope selection (single vs bulk) */}
       {pendingSpeaker && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-slate-700 border border-slate-600 rounded shadow-lg py-1 min-w-[10rem]">
+        <div className="speaker-menu absolute top-full left-0 mt-1 z-50 bg-slate-700 border border-slate-600 rounded shadow-lg py-1 min-w-[10rem]">
           <div className="px-3 py-1.5 text-xs text-slate-400 border-b border-slate-600">
             → {pendingSpeaker.name}
           </div>
@@ -333,7 +280,7 @@ export default function EntrySpeaker({ speakerName, speakerId, speakerConfidence
 
       {/* Inline cluster naming input with register/guest buttons */}
       {namingCluster && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-slate-700 border border-emerald-500 rounded shadow-lg p-2 min-w-[12rem]">
+        <div className="speaker-menu absolute top-full left-0 mt-1 z-50 bg-slate-700 border border-emerald-500 rounded shadow-lg p-2 min-w-[12rem]">
           <input
             ref={clusterInputRef}
             type="text"

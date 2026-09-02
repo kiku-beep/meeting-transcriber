@@ -7,7 +7,6 @@ interface Props {
 }
 
 export default function BackendLoader({ onReady }: Props) {
-  const [dots, setDots] = useState("");
   const [serverUrlInput, setServerUrlInput] = useState(getBaseUrl());
   const [authTokenInput, setAuthTokenInput] = useState(getAuthToken());
   const [checking, setChecking] = useState(false);
@@ -40,17 +39,12 @@ export default function BackendLoader({ onReady }: Props) {
   };
 
   useEffect(() => {
-    const dotTimer = setInterval(() => {
-      setDots((d) => (d.length >= 3 ? "" : d + "."));
-    }, 500);
-
     let cancelled = false;
 
     const pollHealth = async () => {
       try {
         const res = await getHealth();
         if (res.status === "ok" && !cancelled) {
-          clearInterval(dotTimer);
           onReadyRef.current();
           return true;
         }
@@ -65,74 +59,80 @@ export default function BackendLoader({ onReady }: Props) {
 
     return () => {
       cancelled = true;
-      clearInterval(dotTimer);
       clearInterval(healthTimer);
     };
   }, []);
 
   return (
-    <div className="flex min-h-screen bg-slate-950 text-slate-100">
-      <div className="m-auto w-full max-w-xl px-6">
-        <div className="border border-slate-800 bg-slate-900 rounded-lg p-6 shadow-xl">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="w-10 h-10 rounded-full bg-cyan-500/15 text-cyan-300 flex items-center justify-center text-xl">
-              🎙️
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold">Transcriber</h1>
-              <p className="text-sm text-slate-400">リモートバックエンドへ接続中{dots}</p>
-            </div>
-          </div>
+    <div className="backend-loader" data-testid="backend-loader">
+      <header className="backend-loader__topbar">
+        <span>Transcriber</span>
+      </header>
 
-          <div className="space-y-3">
-            <label className="block">
-              <span className="block text-xs font-medium text-slate-400 mb-1">バックエンドURL</span>
-              <input
-                value={serverUrlInput}
-                onChange={(e) => setServerUrlInput(e.target.value)}
-                placeholder="http://workstation0.tailnet.ts.net:8000"
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500"
-              />
-            </label>
-
-            <label className="block">
-              <span className="block text-xs font-medium text-slate-400 mb-1">認証トークン（任意）</span>
-              <input
-                type="password"
-                value={authTokenInput}
-                onChange={(e) => setAuthTokenInput(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500"
-              />
-            </label>
-
-            <div className="text-xs text-slate-500">
-              Client ID: <span className="font-mono text-slate-400">{getClientId()}</span>
-            </div>
+      <main className="backend-loader__main">
+        <section className="backend-loader__content" aria-labelledby="backend-loader-title">
+          <div className="backend-loader__status" role="status" aria-live="polite">
+            <span className="backend-loader__indicator" aria-hidden="true" />
+            <p className="backend-loader__eyebrow">STARTING</p>
+            <h1 id="backend-loader-title">バックエンドに接続しています</h1>
+            <p className="backend-loader__description">
+              音声認識モデルと保存領域を準備しています。接続できると自動で文字起こし画面を開きます。
+            </p>
           </div>
 
           {lastError && (
-            <div className="mt-4 p-3 bg-red-950/70 border border-red-800 rounded text-red-200 text-xs">
-              {lastError}
+            <div className="backend-loader__error" role="alert">
+              <strong>接続を確認できませんでした</strong>
+              <span>{lastError}</span>
             </div>
           )}
 
-          <div className="mt-5 flex items-center gap-3">
+          <details className="backend-loader__settings">
+            <summary>接続設定</summary>
+            <div className="backend-loader__settings-body">
+              <label htmlFor="backend-url">
+                <span>バックエンドURL</span>
+              <input
+                id="backend-url"
+                value={serverUrlInput}
+                onChange={(e) => setServerUrlInput(e.target.value)}
+                placeholder="http://workstation0.tailnet.ts.net:8000"
+              />
+            </label>
+
+              <label htmlFor="backend-token">
+                <span>認証トークン（任意）</span>
+              <input
+                id="backend-token"
+                type="password"
+                value={authTokenInput}
+                onChange={(e) => setAuthTokenInput(e.target.value)}
+              />
+            </label>
+
+              <div className="backend-loader__client-id">
+                Client ID: <span>{getClientId()}</span>
+            </div>
+
+              <div className="backend-loader__actions">
             <button
               onClick={handleConnect}
               disabled={checking}
-              className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 rounded text-sm font-medium"
+                  className="backend-loader__button backend-loader__button--primary"
             >
               {checking ? "確認中..." : "接続"}
             </button>
             <button
               onClick={onReady}
-              className="text-sm text-slate-500 hover:text-slate-300 underline"
+                  className="backend-loader__button backend-loader__button--secondary"
             >
-              アプリを開く
+                  接続せずに開く
             </button>
           </div>
-        </div>
-      </div>
+            </div>
+          </details>
+        </section>
+      </main>
     </div>
   );
 }

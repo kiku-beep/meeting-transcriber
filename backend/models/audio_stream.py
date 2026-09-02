@@ -4,15 +4,28 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
 from scipy.signal import resample_poly
 
 from backend.core.audio_buffer import AudioBuffer
+from backend.core.loopback_selector import LoopbackSourceSelector
 from backend.models.schemas import SessionStatus
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LoopbackStreamState:
+    index: int
+    name: str
+    sample_rate: int
+    channels: int
+    stream: object
+    callback_count: int = 0
 
 
 class AudioStreamManager:
@@ -21,15 +34,12 @@ class AudioStreamManager:
     def __init__(self):
         self._pa = None
         self._stream = None
-        self._loopback_stream = None
+        self._loopback_streams: dict[int, LoopbackStreamState] = {}
 
         self._device_sample_rate: int = 16000
         self._device_channels: int = 1
-        self._loopback_sample_rate: int = 16000
-        self._loopback_channels: int = 1
-
         self._mic_cb_count: int = 0
-        self._loopback_cb_count: int = 0
+        self._loopback_selector = LoopbackSourceSelector()
 
         self._mic_buffer: AudioBuffer | None = None
         self._loopback_buffer: AudioBuffer | None = None
@@ -42,8 +52,6 @@ class AudioStreamManager:
         # Current device tracking
         self._current_mic_index: int | None = None
         self._current_mic_name: str = ""
-        self._current_loopback_index: int | None = None
-        self._current_loopback_name: str = ""
         self._stream_lock = threading.Lock()
 
     @property
@@ -52,7 +60,10 @@ class AudioStreamManager:
 
     @property
     def current_loopback_name(self) -> str:
-        return self._current_loopback_name
+        with self._stream_lock:
+            return " / ".join(
+                state.name for state in self._loopback_streams.values()
+            )
 
     @property
     def current_mic_index(self) -> int | None:
@@ -60,7 +71,13 @@ class AudioStreamManager:
 
     @property
     def current_loopback_index(self) -> int | None:
-        return self._current_loopback_index
+        indices = self.current_loopback_indices
+        return indices[0] if indices else None
+
+    @property
+    def current_loopback_indices(self) -> tuple[int, ...]:
+        with self._stream_lock:
+            return tuple(self._loopback_streams)
 
     def setup(self, mic_buffer: AudioBuffer, loopback_buffer: AudioBuffer,
               recorded_audio: list[np.ndarray],
@@ -77,7 +94,9 @@ class AudioStreamManager:
 
     def reset_counters(self) -> None:
         self._mic_cb_count = 0
-        self._loopback_cb_count = 0
+        for state in self._loopback_streams.values():
+            state.callback_count = 0
+        self._loopback_selector.reset()
 
     def _ensure_pyaudio(self):
         """Ensure a shared PyAudio instance is available (reused across sessions)."""
@@ -141,80 +160,152 @@ class AudioStreamManager:
         self._stream.start_stream()
 
     def open_loopback_stream(self, loopback_device_index: int) -> None:
-        """Open a second stream for WASAPI loopback (system audio)."""
+        """Open one WASAPI loopback without closing existing loopbacks."""
+        self.open_loopback_streams([loopback_device_index])
+
+    def open_loopback_streams(self, device_indices: list[int]) -> list[int]:
+        """Open all requested loopbacks independently."""
+        with self._stream_lock:
+            self._open_loopback_streams_unlocked(device_indices)
+            return list(self._loopback_streams)
+
+    def _open_loopback_streams_unlocked(self, device_indices: list[int]) -> None:
+        for device_index in dict.fromkeys(device_indices):
+            if device_index in self._loopback_streams:
+                continue
+            try:
+                self._open_loopback_stream_unlocked(device_index)
+            except Exception:
+                logger.warning(
+                    "Failed to open loopback device %s",
+                    device_index,
+                    exc_info=True,
+                )
+
+    def _open_loopback_stream_unlocked(self, loopback_device_index: int) -> None:
         import pyaudiowpatch as pyaudio
 
         p = self._ensure_pyaudio()
         dev_info = p.get_device_info_by_index(loopback_device_index)
 
-        self._loopback_sample_rate = int(dev_info["defaultSampleRate"])
-        self._loopback_channels = min(int(dev_info["maxInputChannels"]), 2)
-        self._current_loopback_index = dev_info["index"]
-        self._current_loopback_name = dev_info["name"]
+        sample_rate = int(dev_info["defaultSampleRate"])
+        channels = min(int(dev_info["maxInputChannels"]), 2)
+        device_index = int(dev_info["index"])
 
         logger.info(
             "Opening loopback: %s (%dHz, %dch)",
             dev_info["name"],
-            self._loopback_sample_rate,
-            self._loopback_channels,
+            sample_rate,
+            channels,
         )
 
-        frames_per_buffer = self._loopback_sample_rate // 10
+        frames_per_buffer = sample_rate // 10
 
-        self._loopback_stream = p.open(
+        stream = p.open(
             format=pyaudio.paFloat32,
-            channels=self._loopback_channels,
-            rate=self._loopback_sample_rate,
+            channels=channels,
+            rate=sample_rate,
             input=True,
-            input_device_index=dev_info["index"],
+            input_device_index=device_index,
             frames_per_buffer=frames_per_buffer,
-            stream_callback=self._loopback_callback,
+            stream_callback=self._make_loopback_callback(device_index),
+            start=False,
         )
-        self._loopback_stream.start_stream()
+        self._loopback_streams[device_index] = LoopbackStreamState(
+            index=device_index,
+            name=dev_info["name"],
+            sample_rate=sample_rate,
+            channels=channels,
+            stream=stream,
+        )
+        try:
+            stream.start_stream()
+        except Exception:
+            self._loopback_streams.pop(device_index, None)
+            try:
+                stream.close()
+            except Exception:
+                pass
+            raise
+
+    def sync_loopback_streams(self, device_indices: list[int]) -> list[int]:
+        """Make open loopbacks match requested indices without reopening retained streams."""
+        requested = list(dict.fromkeys(device_indices))
+        requested_set = set(requested)
+        with self._stream_lock:
+            for device_index in list(self._loopback_streams):
+                if device_index not in requested_set:
+                    self._close_loopback_stream_unlocked(device_index)
+            self._open_loopback_streams_unlocked(requested)
+            return [
+                device_index
+                for device_index in requested
+                if device_index in self._loopback_streams
+            ]
+
+    def reopen_devices(
+        self,
+        mic_device_index: int | None,
+        loopback_device_indices: list[int],
+    ) -> list[int]:
+        """Safely rebuild PyAudio after a physical device-list change."""
+        with self._stream_lock:
+            self._close_mic_stream_unlocked()
+            for device_index in list(self._loopback_streams):
+                self._close_loopback_stream_unlocked(device_index)
+            self._recreate_pyaudio()
+            if mic_device_index is not None:
+                self.open_mic_stream(mic_device_index)
+            self._open_loopback_streams_unlocked(loopback_device_indices)
+            return [
+                device_index
+                for device_index in loopback_device_indices
+                if device_index in self._loopback_streams
+            ]
 
     def switch_mic(self, new_device_index: int) -> None:
         """Hot-switch microphone stream to a different device."""
         with self._stream_lock:
-            if self._stream:
-                try:
-                    self._stream.stop_stream()
-                    self._stream.close()
-                except Exception:
-                    pass
-                self._stream = None
+            self._close_mic_stream_unlocked()
             self.open_mic_stream(new_device_index)
 
+    def _close_mic_stream_unlocked(self) -> None:
+        if self._stream:
+            try:
+                self._stream.stop_stream()
+                self._stream.close()
+            except Exception:
+                pass
+        self._stream = None
+        self._current_mic_index = None
+        self._current_mic_name = ""
+
     def switch_loopback(self, new_device_index: int | None) -> None:
-        """Hot-switch loopback stream to a different device (or close if None)."""
+        """Compatibility API: replace all loopbacks with one device or none."""
         with self._stream_lock:
-            if self._loopback_stream:
-                try:
-                    self._loopback_stream.stop_stream()
-                    self._loopback_stream.close()
-                except Exception:
-                    pass
-                self._loopback_stream = None
-                self._current_loopback_index = None
-                self._current_loopback_name = ""
+            for device_index in list(self._loopback_streams):
+                self._close_loopback_stream_unlocked(device_index)
             if new_device_index is not None:
-                self.open_loopback_stream(new_device_index)
+                self._open_loopback_streams_unlocked([new_device_index])
+
+    def _close_loopback_stream_unlocked(self, device_index: int) -> None:
+        state = self._loopback_streams.pop(device_index, None)
+        if state is None:
+            return
+        try:
+            state.stream.stop_stream()
+            state.stream.close()
+        except Exception:
+            pass
+        self._loopback_selector.remove_source(device_index)
 
     def close_streams(self) -> None:
         """Close audio streams but keep PyAudio instance alive for reuse."""
         with self._stream_lock:
-            for stream in (self._stream, self._loopback_stream):
-                if stream:
-                    try:
-                        stream.stop_stream()
-                        stream.close()
-                    except Exception:
-                        pass
-            self._stream = None
-            self._loopback_stream = None
-            self._current_mic_index = None
-            self._current_mic_name = ""
-            self._current_loopback_index = None
-            self._current_loopback_name = ""
+            self._close_mic_stream_unlocked()
+            for device_index in list(self._loopback_streams):
+                self._close_loopback_stream_unlocked(device_index)
+            self._loopback_selector.reset()
 
     def terminate(self) -> None:
         """Terminate PyAudio (call only on app shutdown)."""
@@ -263,25 +354,45 @@ class AudioStreamManager:
         self._recorded_audio.append(audio.copy())
         return (None, pyaudio.paContinue)
 
-    def _loopback_callback(self, in_data, frame_count, time_info, status):
-        """PyAudio callback for loopback — runs in a separate thread.
+    def _make_loopback_callback(self, device_index: int):
+        """Build a source-aware callback for one WASAPI loopback."""
 
-        Loopback audio is stored in a SEPARATE list (_recorded_loopback) from
-        mic audio (_recorded_audio). They are mixed together in _save_audio().
-        """
-        import pyaudiowpatch as pyaudio
+        def callback(in_data, frame_count, time_info, status):
+            import pyaudiowpatch as pyaudio
 
-        if self._get_status() == SessionStatus.PAUSED:
+            if self._get_status() == SessionStatus.PAUSED:
+                return (None, pyaudio.paContinue)
+
+            state = self._loopback_streams.get(device_index)
+            if state is None:
+                return (None, pyaudio.paContinue)
+
+            raw_audio = np.frombuffer(in_data, dtype=np.float32)
+            audio = self._resample_to_16k(
+                raw_audio,
+                state.sample_rate,
+                state.channels,
+            )
+            state.callback_count += 1
+            if state.callback_count % 100 == 1:
+                amp = float(np.max(np.abs(audio))) if len(audio) > 0 else 0.0
+                logger.info(
+                    "Loopback %s cb #%d: len=%d, amp=%.4f",
+                    state.name,
+                    state.callback_count,
+                    len(audio),
+                    amp,
+                )
+
+            if self._loopback_selector.should_emit(
+                device_index,
+                audio,
+                now=time.monotonic(),
+            ):
+                self._loopback_buffer.feed(audio)
+                if self._recorded_loopback is not None:
+                    self._recorded_loopback.append(audio.copy())
+
             return (None, pyaudio.paContinue)
 
-        raw_audio = np.frombuffer(in_data, dtype=np.float32)
-        audio = self._resample_to_16k(raw_audio, self._loopback_sample_rate,
-                                      self._loopback_channels)
-        self._loopback_cb_count += 1
-        if self._loopback_cb_count % 100 == 1:
-            amp = float(np.max(np.abs(audio))) if len(audio) > 0 else 0.0
-            logger.info("Loopback cb #%d: len=%d, amp=%.4f", self._loopback_cb_count, len(audio), amp)
-        self._loopback_buffer.feed(audio)
-        if self._recorded_loopback is not None:
-            self._recorded_loopback.append(audio.copy())
-        return (None, pyaudio.paContinue)
+        return callback

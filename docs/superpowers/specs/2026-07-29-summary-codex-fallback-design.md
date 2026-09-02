@@ -61,8 +61,9 @@ Keep the existing subscription-safety checks and invocation behavior.
   failure, so it cannot silently consume metered OpenAI API credit.
 - Invoke `codex exec` non-interactively with the `gen` profile.
 - Send the complete summary prompt through stdin.
-- Run ephemeral, read-only, without repository rules, from an empty temporary
-  working directory.
+- Run ephemeral, read-only, without base user configuration or repository
+  rules, from an empty temporary working directory. The explicit `gen` profile
+  is still loaded.
 - Write the final response through `--output-last-message` and use only that
   file as summary content.
 - Refactor subprocess timeout handling to receive a provider label and timeout,

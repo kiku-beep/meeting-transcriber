@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +24,8 @@ WHISPER_CPP_MODEL_FILES = {
     "kotoba-v2.0": "ggml-kotoba-whisper-v2.0-q5_0.bin",
     "large-v3": "ggml-large-v3-q5_0.bin",
 }
+
+_SERVER_START_LOCK = threading.Lock()
 
 
 def _project_root() -> Path:
@@ -129,9 +132,10 @@ class WhisperCppServerBackend:
         if self._model_path is None:
             raise RuntimeError(f"whisper.cpp model not found for {self.model_size}")
 
-        if not self._is_healthy():
-            self._start_server()
-            self._wait_until_ready()
+        with _SERVER_START_LOCK:
+            if not self._is_healthy():
+                self._start_server()
+                self._wait_until_ready()
 
         self.is_loaded = True
         logger.info(
@@ -155,7 +159,25 @@ class WhisperCppServerBackend:
         if not self.is_loaded:
             raise RuntimeError("whisper.cpp backend not loaded")
 
+        self._ensure_server_ready()
         t0 = time.monotonic()
+        try:
+            result = self._transcribe_once(audio, sample_rate)
+        except httpx.TransportError:
+            logger.warning("whisper.cpp server request failed; restarting server and retrying once")
+            self._restart_server()
+            result = self._transcribe_once(audio, sample_rate)
+
+        elapsed = time.monotonic() - t0
+        logger.info(
+            "Transcribed %.1fs audio in %.1fs (device=vulkan, backend=whisper.cpp): %s",
+            len(audio) / sample_rate,
+            elapsed,
+            result["text"][:80],
+        )
+        return result
+
+    def _transcribe_once(self, audio: np.ndarray, sample_rate: int) -> dict:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             wav_path = Path(tmp.name)
         try:
@@ -178,14 +200,25 @@ class WhisperCppServerBackend:
             except OSError:
                 pass
 
-        elapsed = time.monotonic() - t0
-        logger.info(
-            "Transcribed %.1fs audio in %.1fs (device=vulkan, backend=whisper.cpp): %s",
-            len(audio) / sample_rate,
-            elapsed,
-            result["text"][:80],
-        )
         return result
+
+    def _ensure_server_ready(self) -> None:
+        if self._is_healthy():
+            return
+        logger.warning("whisper.cpp backend is loaded but server is not healthy; restarting")
+        self._restart_server()
+
+    def _restart_server(self) -> None:
+        if self._process and self._process.poll() is None:
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+                self._process.wait(timeout=5)
+        self._process = None
+        self._start_server()
+        self._wait_until_ready()
 
     def _start_server(self) -> None:
         assert self._server_path is not None

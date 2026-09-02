@@ -54,6 +54,34 @@ def list_audio_devices() -> list[AudioDevice]:
     return devices
 
 
+def select_preferred_loopbacks(
+    devices: list[AudioDevice],
+    patterns: tuple[str, ...],
+) -> list[AudioDevice]:
+    """Select WASAPI loopbacks by stable name fragments."""
+    selected: list[AudioDevice] = []
+    seen: set[int] = set()
+
+    for pattern in patterns:
+        needle = pattern.casefold()
+        for device in devices:
+            if (
+                device.index not in seen
+                and device.is_loopback
+                and device.host_api == "Windows WASAPI"
+                and needle in device.name.casefold()
+            ):
+                selected.append(device)
+                seen.add(device.index)
+
+    return selected
+
+
+def get_preferred_loopbacks(patterns: tuple[str, ...]) -> list[AudioDevice]:
+    """Enumerate and resolve configured WASAPI loopback endpoints."""
+    return select_preferred_loopbacks(list_audio_devices(), patterns)
+
+
 def get_default_microphone() -> AudioDevice | None:
     """Get the default WASAPI microphone device."""
     p = pyaudio.PyAudio()

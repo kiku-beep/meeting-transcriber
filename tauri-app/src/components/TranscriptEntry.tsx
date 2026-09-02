@@ -83,9 +83,10 @@ export default function TranscriptEntry({
   return (
     <div
       ref={ref}
-      className={`flex gap-3 py-1.5 px-3 hover:bg-slate-800/50 rounded text-sm group ${saving ? "opacity-50" : ""} ${isCurrentlyPlaying ? "border-l-2 border-cyan-400 bg-slate-800/30" : "border-l-2 border-transparent"}`}
+      data-transcript-entry-start={entry.timestamp_start}
+      className={`transcript-entry group ${saving ? "opacity-50" : ""} ${isCurrentlyPlaying ? "is-playing" : ""}`}
     >
-      <span className="text-slate-500 shrink-0 w-7 text-right">
+      <span className="transcript-entry__index">
         #{index}
         {entry.refined && <span style={{ color: "#4ade80", fontSize: "0.7em", marginLeft: 2 }} title="AI補正済み">✓</span>}
       </span>
@@ -94,14 +95,14 @@ export default function TranscriptEntry({
       {onPlayFromEntry && (
         <button
           onClick={() => onPlayFromEntry(entry.timestamp_start)}
-          className="text-slate-500 hover:text-cyan-400 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+          className="transcript-entry__action transcript-entry__play"
           title="ここから再生"
         >
           ▶
         </button>
       )}
 
-      <span className="text-slate-500 shrink-0 tabular-nums">
+      <span className="transcript-entry__time">
         {formatTime(entry.timestamp_start)}
       </span>
 
@@ -109,7 +110,7 @@ export default function TranscriptEntry({
       {onToggleBookmark && (
         <button
           onClick={() => onToggleBookmark(entry.id)}
-          className={`shrink-0 text-sm ${entry.bookmarked ? "text-yellow-400" : "text-slate-600 hover:text-yellow-400 opacity-0 group-hover:opacity-100"} transition-opacity`}
+          className={`transcript-entry__action ${entry.bookmarked ? "is-bookmarked" : ""}`}
           title={entry.bookmarked ? "ブックマーク解除" : "ブックマーク"}
         >
           {entry.bookmarked ? "★" : "☆"}
@@ -120,14 +121,14 @@ export default function TranscriptEntry({
       {onDeleteEntry && (
         <button
           onClick={() => onDeleteEntry(entry.id)}
-          className="text-slate-500 hover:text-red-400 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+          className="transcript-entry__action transcript-entry__delete"
           title="エントリを削除"
         >
           ✕
         </button>
       )}
 
-      <EntrySpeaker
+      <div className="transcript-entry__speaker"><EntrySpeaker
         speakerName={entry.speaker_name}
         speakerId={entry.speaker_id}
         speakerConfidence={entry.speaker_confidence}
@@ -140,15 +141,15 @@ export default function TranscriptEntry({
         onNameCluster={onNameCluster ? handleNameCluster : undefined}
         onRegisterNewSpeaker={onRegisterNewSpeaker ? handleRegisterNewSpeaker : undefined}
         onConfirmSuggestion={onConfirmSuggestion}
-      />
+      /></div>
 
-      <EntryEditor
+      <div className="transcript-entry__message"><EntryEditor
         text={entry.text}
         entryId={entry.id}
         searchQuery={searchQuery}
         onEditText={onEditText}
         onSavingChange={setSaving}
-      />
+      /></div>
     </div>
   );
 }

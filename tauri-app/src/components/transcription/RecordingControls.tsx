@@ -5,10 +5,14 @@ interface Props {
   sessionName: string;
   micDevice: string;
   loopbackDevice: string;
+  elapsedSeconds: number;
+  aiOpen: boolean;
   onSessionNameChange: (name: string) => void;
   onStart: () => void;
   onPause: () => void;
   onStop: () => void;
+  onDiscard: () => void;
+  onAiToggle: () => void;
 }
 
 export default function RecordingControls({
@@ -18,28 +22,30 @@ export default function RecordingControls({
   sessionName,
   micDevice,
   loopbackDevice,
+  elapsedSeconds,
+  aiOpen,
   onSessionNameChange,
   onStart,
   onPause,
   onStop,
+  onDiscard,
+  onAiToggle,
 }: Props) {
-  return (
-    <div className="space-y-2">
-      {/* Row 1: Active devices (auto-detected) */}
-      {isRunning && (micDevice || loopbackDevice) && (
-        <div className="flex items-center gap-3 text-xs text-slate-400">
-          {micDevice && <span title="マイク">🎤 {micDevice}</span>}
-          {loopbackDevice && <span title="ループバック">🔊 {loopbackDevice}</span>}
-        </div>
-      )}
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = Math.floor(elapsedSeconds % 60);
+  const elapsed = `${minutes}:${String(seconds).padStart(2, "0")}`;
 
-      {/* Row 2: Session name + buttons */}
-      <div className="flex items-center gap-3">
+  return (
+    <div className="recording-bar">
+      <div className="recording-state" title={[micDevice, loopbackDevice].filter(Boolean).join(" / ")}>
+        <span className={`recording-dot ${isRunning ? "recording-dot--active" : ""}`} aria-hidden="true" />
+        <span>{isRunning ? (isPaused ? "一時停止" : "録音中") : "待機中"}</span>
+        {isRunning && <span className="recording-elapsed">{elapsed}</span>}
+      </div>
         <input
           value={sessionName}
           onChange={(e) => onSessionNameChange(e.target.value)}
-          disabled={isRunning}
-          className="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm flex-1"
+          className="recording-name"
           placeholder="セッション名（省略可）"
         />
 
@@ -47,7 +53,7 @@ export default function RecordingControls({
           <button
             onClick={onStart}
             disabled={loading}
-            className="px-5 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-slate-600 rounded text-sm font-medium transition-colors shrink-0"
+            className="control-button control-button--record"
           >
             {loading ? "開始中..." : "録音開始"}
           </button>
@@ -55,20 +61,36 @@ export default function RecordingControls({
           <>
             <button
               onClick={onPause}
-              className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 rounded text-sm transition-colors shrink-0"
+              className="control-button"
             >
-              {isPaused ? "再開" : "一時停止"}
+              <span aria-hidden="true">Ⅱ</span> {isPaused ? "再開" : "一時停止"}
             </button>
             <button
               onClick={onStop}
               disabled={loading}
-              className="px-4 py-1.5 bg-red-700 hover:bg-red-800 disabled:bg-slate-600 rounded text-sm transition-colors shrink-0"
+              className="control-button"
             >
-              停止
+              <span aria-hidden="true">□</span> 停止
+            </button>
+            <button
+              type="button"
+              onClick={onDiscard}
+              className="control-button control-button--discard"
+              aria-label="録音を破棄"
+            >
+              破棄
             </button>
           </>
         )}
-      </div>
+      <button
+        type="button"
+        className={`control-button control-button--ai ${aiOpen ? "is-active" : ""}`}
+        aria-label="AIアシスト"
+        aria-expanded={aiOpen}
+        onClick={onAiToggle}
+      >
+        <span aria-hidden="true">✣</span> AI
+      </button>
     </div>
   );
 }

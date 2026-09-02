@@ -76,7 +76,7 @@ export default function EntryEditor({ text, entryId, searchQuery, onEditText, on
           onKeyDown={handleTextKeyDown}
           onBlur={handleTextSave}
           rows={Math.max(1, Math.ceil(editText.length / 60))}
-          className="flex-1 bg-slate-700 border border-cyan-500 rounded px-2 py-0.5 text-sm text-slate-200 resize-none focus:outline-none"
+          className="entry-editor__input flex-1 rounded px-2 py-0.5 text-sm resize-none focus:outline-none"
         />
       </div>
     );
@@ -84,7 +84,7 @@ export default function EntryEditor({ text, entryId, searchQuery, onEditText, on
 
   return (
     <span
-      className={`text-slate-200 ${onEditText ? "cursor-pointer hover:bg-slate-700/50 rounded px-1 -mx-1" : ""}`}
+      className={`entry-editor__text ${onEditText ? "entry-editor__text--editable cursor-pointer rounded px-1 -mx-1" : ""}`}
       onClick={handleTextClick}
       title={onEditText ? "クリックで編集" : undefined}
     >

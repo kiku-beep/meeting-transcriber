@@ -47,3 +47,17 @@ def test_entries_use_requested_client_session(monkeypatch):
 
     assert response.status_code == 200
     assert [entry["id"] for entry in response.json()["entries"]] == ["alice-entry"]
+
+
+def test_model_switch_is_blocked_while_another_session_is_active(monkeypatch):
+    reset_registry(monkeypatch)
+    alice = session_mod.get_or_create_session("alice")
+    alice.status = SessionStatus.RUNNING
+
+    client = TestClient(make_app())
+    response = client.post(
+        "/api/session/model?client_id=bob",
+        json={"model_size": "tiny"},
+    )
+
+    assert response.status_code == 409

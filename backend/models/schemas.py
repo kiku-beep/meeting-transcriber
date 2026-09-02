@@ -6,20 +6,19 @@ from datetime import datetime
 from enum import Enum
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AudioSegment(BaseModel):
     """A chunk of audio data ready for transcription."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     audio: list[float] = Field(description="PCM samples (16kHz mono float32)")
     sample_rate: int = 16000
     timestamp_start: float = Field(description="Seconds since session start")
     timestamp_end: float = Field(description="Seconds since session start")
     source: str = "microphone"
-
-    class Config:
-        arbitrary_types_allowed = True
 
     def to_numpy(self) -> np.ndarray:
         return np.array(self.audio, dtype=np.float32)

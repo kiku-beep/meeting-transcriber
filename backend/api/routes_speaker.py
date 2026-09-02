@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from backend.core.audio_utils import resample_to_16k_mono
 from backend.core.diarizer import Diarizer
+from backend.core.model_runtime import get_model_runtime
 from backend.storage.speaker_store import get_speaker_store
 
 logger = logging.getLogger(__name__)
@@ -15,10 +16,8 @@ router = APIRouter(prefix="/api/speakers", tags=["speakers"])
 
 
 def _get_diarizer() -> Diarizer:
-    """Return the shared Diarizer from the singleton session (avoids a second instance)."""
-    from backend.models.session import get_session
-
-    d = get_session()._diarizer
+    """Return a lightweight facade backed by the process-wide speaker model."""
+    d = get_model_runtime().create_diarizer()
     if not d.is_loaded:
         d.load_model()
     return d

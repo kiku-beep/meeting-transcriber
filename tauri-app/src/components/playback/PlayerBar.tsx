@@ -35,12 +35,12 @@ export default function PlayerBar({ state, actions, onDeleteAudio }: Props) {
   };
 
   return (
-    <div data-testid="player-bar" className="flex items-center gap-3 px-4 py-2 bg-slate-800 border-t border-slate-700 shrink-0">
+    <div data-testid="player-bar" className="player-bar flex items-center gap-3 px-4 py-2 shrink-0">
       {/* Play/Pause */}
       <button
         data-testid="player-toggle"
         onClick={() => actions.toggle()}
-        className="text-lg w-8 h-8 flex items-center justify-center rounded hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+        className="player-bar__toggle text-lg w-8 h-8 flex items-center justify-center rounded disabled:opacity-40 disabled:cursor-not-allowed"
         title={isLoading ? "読み込み中" : isPlaying ? "一時停止" : "再生"}
         disabled={isLoading}
       >
@@ -50,7 +50,7 @@ export default function PlayerBar({ state, actions, onDeleteAudio }: Props) {
       </button>
 
       {/* Time */}
-      <span data-testid="player-time" className="text-xs text-slate-400 tabular-nums w-24 text-center shrink-0">
+      <span data-testid="player-time" className="player-bar__time text-xs tabular-nums w-24 text-center shrink-0">
         {isLoading ? "読込中..." : `${formatTime(currentTime)} / ${formatTime(duration)}`}
       </span>
 
@@ -63,7 +63,7 @@ export default function PlayerBar({ state, actions, onDeleteAudio }: Props) {
         step={0.1}
         value={currentTime}
         onChange={handleSeek}
-        className="flex-1 h-1.5 accent-cyan-400 cursor-pointer disabled:opacity-40"
+        className="player-bar__seek flex-1 h-1.5 cursor-pointer disabled:opacity-40"
         disabled={isLoading}
       />
 
@@ -71,7 +71,7 @@ export default function PlayerBar({ state, actions, onDeleteAudio }: Props) {
       <button
         data-testid="player-rate"
         onClick={cycleRate}
-        className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 tabular-nums min-w-[3rem]"
+        className="player-bar__rate text-xs px-2 py-1 rounded tabular-nums min-w-[3rem]"
         title="再生速度"
       >
         {playbackRate}x
@@ -82,7 +82,7 @@ export default function PlayerBar({ state, actions, onDeleteAudio }: Props) {
         <button
           data-testid="player-delete"
           onClick={handleDelete}
-          className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-red-600 text-slate-400 hover:text-white"
+          className="player-bar__delete text-xs px-2 py-1 rounded"
           title="音声削除"
         >
           音声削除

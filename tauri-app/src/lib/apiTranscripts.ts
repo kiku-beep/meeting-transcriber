@@ -1,6 +1,8 @@
 import { apiFetch, apiFetchText } from "./api";
 import type { TranscriptEntry, TranscriptSession, EntryEditRequest, EntryEditResponse } from "./types";
 
+export type TranscriptExportFormat = "txt" | "json" | "md" | "action-md";
+
 export async function getSessions(): Promise<{ sessions: TranscriptSession[] }> {
   return apiFetch("/api/transcripts");
 }
@@ -11,14 +13,14 @@ export async function getTranscript(
   return apiFetch(`/api/transcripts/${sessionId}`);
 }
 
-export async function exportTranscript(sessionId: string, format: "txt" | "json" | "md"): Promise<string> {
+export async function exportTranscript(sessionId: string, format: TranscriptExportFormat): Promise<string> {
   if (format === "json") {
     const data = await apiFetch<{ session_id: string; entries: TranscriptEntry[] }>(
       `/api/transcripts/${sessionId}/export?format=json`,
     );
     return JSON.stringify(data, null, 2);
   }
-  return apiFetchText(`/api/transcripts/${sessionId}/export?format=${format}`);
+  return apiFetchText(`/api/transcripts/${sessionId}/export?format=${encodeURIComponent(format)}`);
 }
 
 export async function deleteSession(sessionId: string): Promise<{ deleted: string }> {

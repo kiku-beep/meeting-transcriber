@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import wave
 from pathlib import Path
@@ -151,7 +152,7 @@ async def compress_audio(session_id: str):
     if find_ffmpeg() is None:
         return {"status": "ffmpeg_not_found", "session_id": session_id}
 
-    ogg_path = compress_wav_to_ogg(wav_path)
+    ogg_path = await asyncio.to_thread(compress_wav_to_ogg, wav_path)
     if ogg_path is None:
         raise HTTPException(500, "Compression failed")
 

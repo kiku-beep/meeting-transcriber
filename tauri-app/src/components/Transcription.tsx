@@ -2,17 +2,19 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useWebSocket } from "../lib/useWebSocket";
 import { isTauriRuntime } from "../lib/api";
-import { startSession, stopSession, pauseSession, discardSession, nameCluster, registerNewSpeaker, setExpectedSpeakers, editSessionEntry, bulkUpdateSpeaker, confirmSuggestion, getSessionEntries, deleteSessionEntry } from "../lib/apiSession";
+import { startSession, stopSession, pauseSession, discardSession, nameCluster, registerNewSpeaker, setExpectedSpeakers, editSessionEntry, bulkUpdateSpeaker, confirmSuggestion, getSessionEntries, deleteSessionEntry, getSessionStatus } from "../lib/apiSession";
 import { getSpeakers } from "../lib/apiSpeakers";
+import { renameSession } from "../lib/apiTranscripts";
+import { isBackendConnectionError, waitForBackendHealth } from "../lib/apiHealth";
 import { isRemoteMode, startAudioSidecar, stopAudioSidecar } from "../lib/audioSidecar";
 import type { TranscriptEntry, SessionInfo, Speaker } from "../lib/types";
 import RecordingControls from "./transcription/RecordingControls";
 import CallNotificationBanner from "./transcription/CallNotificationBanner";
 import SilenceWarningBanner from "./transcription/SilenceWarningBanner";
 import MeetingParticipants from "./transcription/MeetingParticipants";
-import TranscriptSearch from "./transcription/TranscriptSearch";
 import TranscriptList from "./transcription/TranscriptList";
 import StatusBar from "./StatusBar";
+import LiveAiPanel from "./transcription/LiveAiPanel";
 
 interface Props {
   onSessionStop: (sessionId: string) => void;
@@ -25,18 +27,15 @@ export default function Transcription({ onSessionStop }: Props) {
   const [sessionName, setSessionName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
   const [silenceWarning, setSilenceWarning] = useState(false);
+  const [aiPanelOpen, setAiPanelOpen] = useState(true);
   const lastEntryAt = useRef<number | null>(null);
 
   const isRunning = status?.status === "running" || status?.status === "paused";
   const isPaused = status?.status === "paused";
 
-  const filteredEntries = searchQuery
-    ? entries.filter(e =>
-        e.text.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        e.speaker_name.toLowerCase().includes(searchQuery.toLowerCase()))
-    : entries;
+  const searchQuery = "";
+  const filteredEntries = entries;
 
   const handleEntry = useCallback((entry: TranscriptEntry) => {
     setEntries((prev) => [...prev, entry]);
@@ -57,6 +56,16 @@ export default function Transcription({ onSessionStop }: Props) {
       setEntries(data.entries);
     } catch {
       /* ignore */
+    }
+  }, []);
+
+  const syncSessionStatus = useCallback(async () => {
+    try {
+      const latest = await getSessionStatus();
+      setStatus(latest);
+      return latest;
+    } catch {
+      return null;
     }
   }, []);
 
@@ -86,6 +95,26 @@ export default function Transcription({ onSessionStop }: Props) {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const sync = async () => {
+      try {
+        const latest = await getSessionStatus();
+        if (!cancelled) setStatus(latest);
+      } catch {
+        /* status sync is best-effort; WebSocket remains primary */
+      }
+    };
+
+    sync();
+    const timer = setInterval(sync, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
   // Refresh speakers when session starts (might register new speakers during session)
   useEffect(() => {
     if (isRunning) {
@@ -101,31 +130,43 @@ export default function Transcription({ onSessionStop }: Props) {
     invoke("set_recording_icon", { recording: status?.status === "running" });
   }, [status?.status]);
 
-  // Fallback: if session is running but WS hasn't delivered entries after 3s,
-  // fetch from REST API. Handles cases where WS entry delivery fails.
-  const syncAttempted = useRef(false);
+  // Fallback: if WebSocket entry delivery is missed, keep REST-syncing while
+  // the backend reports more entries than the UI currently has.
   useEffect(() => {
-    if (!isRunning) {
-      syncAttempted.current = false;
-      return;
-    }
-    if (entries.length > 0 || syncAttempted.current) return;
+    if (!isRunning) return;
 
-    const timer = setTimeout(async () => {
-      syncAttempted.current = true;
+    let cancelled = false;
+    let inFlight = false;
+
+    const syncMissingEntries = async () => {
+      const backendEntryCount = status?.entry_count ?? 0;
+      const shouldSync = backendEntryCount > entries.length || entries.length === 0;
+      if (!shouldSync || inFlight) return;
+
+      inFlight = true;
       try {
         const data = await getSessionEntries();
-        setEntries((prev) => (prev.length === 0 ? data.entries : prev));
-        if (data.entries.length > 0) {
-          console.warn("[Transcriber] REST sync: loaded", data.entries.length, "entries (WS fallback)");
+        if (cancelled) return;
+        setEntries((prev) => (data.entries.length > prev.length ? data.entries : prev));
+        if (data.entries.length > entries.length) {
+          lastEntryAt.current = Date.now();
+          setSilenceWarning(false);
+          console.warn("[Transcriber] REST sync: loaded", data.entries.length, "entries");
         }
       } catch {
         /* ignore */
+      } finally {
+        inFlight = false;
       }
-    }, 3000);
+    };
 
-    return () => clearTimeout(timer);
-  }, [isRunning, entries.length]);
+    syncMissingEntries();
+    const timer = setInterval(syncMissingEntries, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isRunning, status?.entry_count, entries.length]);
 
   // Silence detection: show warning if no entry received for 3 minutes while running
   const SILENCE_THRESHOLD_MS = 3 * 60 * 1000;
@@ -148,10 +189,22 @@ export default function Transcription({ onSessionStop }: Props) {
   }, [isRunning]);
 
   const handleStart = async (overrideName?: string) => {
+    if (loading) return;
     setLoading(true);
     setError("");
-    setEntries([]);
     try {
+      await waitForBackendHealth();
+      const latest = await syncSessionStatus();
+      if (latest && latest.status !== "idle") {
+        if (latest.status === "running" || latest.status === "paused") {
+          await handleRefresh();
+          return;
+        }
+        setError("録音状態を同期しています。数秒後にもう一度開始してください。");
+        return;
+      }
+
+      setEntries([]);
       const name = overrideName || sessionName || undefined;
       if (isRemoteMode()) {
         // Remote mode: start audio sidecar (which sends "start" to server)
@@ -162,7 +215,19 @@ export default function Transcription({ onSessionStop }: Props) {
       }
       if (overrideName) setSessionName(overrideName);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      if (message.includes("Cannot start session") || message.includes("409")) {
+        const latest = await syncSessionStatus();
+        if (latest && latest.status !== "idle") {
+          await handleRefresh();
+          return;
+        }
+      }
+      setError(
+        isBackendConnectionError(e)
+          ? "バックエンドを起動中です。数秒後にもう一度開始してください。"
+          : message
+      );
     } finally {
       setLoading(false);
     }
@@ -187,16 +252,26 @@ export default function Transcription({ onSessionStop }: Props) {
   const handleStop = async () => {
     setLoading(true);
     try {
+      let stoppedSessionId: string;
       if (isRemoteMode()) {
         const remoteSessionId = status?.session_id;
         await stopAudioSidecar();
         if (remoteSessionId) {
-          onSessionStop(remoteSessionId);
-          return;
+          stoppedSessionId = remoteSessionId;
+        } else {
+          const info = await stopSession();
+          stoppedSessionId = info.session_id;
         }
+      } else {
+        const info = await stopSession();
+        stoppedSessionId = info.session_id;
       }
-      const info = await stopSession();
-      onSessionStop(info.session_id);
+
+      const trimmedSessionName = sessionName.trim();
+      if (trimmedSessionName) {
+        await renameSession(stoppedSessionId, trimmedSessionName);
+      }
+      onSessionStop(stoppedSessionId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -205,11 +280,13 @@ export default function Transcription({ onSessionStop }: Props) {
   };
 
   const handleDiscard = async () => {
-    if (!confirm("録音を破棄しますか？保存されません。")) return;
+    if (!confirm("この録音を破棄しますか？文字起こしと録音は保存されません。")) return;
     setLoading(true);
+    setError("");
     try {
       await discardSession();
       setEntries([]);
+      setSessionName("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -319,9 +396,9 @@ export default function Transcription({ onSessionStop }: Props) {
   };
 
   return (
-    <div className="flex flex-col h-full relative">
+    <div className="transcription-workspace flex flex-col h-full relative workspace-screen">
       {/* Controls */}
-      <div className="p-4 border-b border-slate-700 space-y-3 shrink-0">
+      <div className="workspace-toolbar shrink-0">
         <RecordingControls
           isRunning={isRunning}
           isPaused={isPaused}
@@ -329,10 +406,14 @@ export default function Transcription({ onSessionStop }: Props) {
           sessionName={sessionName}
           micDevice={status?.mic_device ?? ""}
           loopbackDevice={status?.loopback_device ?? ""}
+          elapsedSeconds={status?.elapsed_seconds ?? 0}
+          aiOpen={aiPanelOpen}
           onSessionNameChange={setSessionName}
           onStart={() => handleStart()}
           onPause={handlePause}
           onStop={handleStop}
+          onDiscard={handleDiscard}
+          onAiToggle={() => setAiPanelOpen((open) => !open)}
         />
 
         <CallNotificationBanner isRunning={isRunning} onStartWithName={handleStartWithName} />
@@ -344,9 +425,9 @@ export default function Transcription({ onSessionStop }: Props) {
         />
 
         {error && (
-          <div className="p-2 bg-red-900/50 border border-red-700 rounded text-red-300 text-xs flex items-center justify-between">
+          <div className="inline-alert inline-alert--error flex items-center justify-between" role="alert">
             <span>{error}</span>
-            <button onClick={() => setError("")} className="text-red-400 hover:text-red-300 ml-2 shrink-0">&#x2715;</button>
+            <button onClick={() => setError("")} className="inline-alert__dismiss ml-2 shrink-0">&#x2715;</button>
           </div>
         )}
 
@@ -357,38 +438,34 @@ export default function Transcription({ onSessionStop }: Props) {
         />
       </div>
 
-      {/* Search Bar */}
-      {entries.length > 0 && (
-        <TranscriptSearch value={searchQuery} onChange={setSearchQuery} />
-      )}
-
-      {/* Entries */}
-      <TranscriptList
-        entries={entries}
-        filteredEntries={filteredEntries}
-        speakers={speakers}
-        searchQuery={searchQuery}
-        isRunning={isRunning}
-        onEditText={handleEditText}
-        onEditSpeaker={handleEditSpeaker}
-        onEditSpeakerBulk={handleEditSpeakerBulk}
-        onNameCluster={isRunning ? handleNameCluster : undefined}
-        onRegisterNewSpeaker={isRunning ? handleRegisterNewSpeaker : undefined}
-        onConfirmSuggestion={isRunning ? handleConfirmSuggestion : undefined}
-        onDeleteEntry={handleDeleteEntry}
-      />
-
-      {/* Discard Button - bottom right, away from other controls */}
-      {isRunning && (
-        <button
-          onClick={handleDiscard}
-          disabled={loading}
-          className="absolute bottom-12 right-4 px-4 py-1.5 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-500 rounded text-sm transition-colors opacity-70 hover:opacity-100"
-        >
-          破棄
-        </button>
-      )}
-
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        <section className="transcript-surface flex flex-col flex-1 min-w-0" aria-label="文字起こし">
+          <header className="transcript-surface__header">
+            <span>リアルタイム文字起こし</span>
+            <span className="subscription-badge">Claudeサブスク枠</span>
+          </header>
+          <TranscriptList
+            entries={entries}
+            filteredEntries={filteredEntries}
+            speakers={speakers}
+            searchQuery={searchQuery}
+            isRunning={isRunning}
+            onEditText={handleEditText}
+            onEditSpeaker={handleEditSpeaker}
+            onEditSpeakerBulk={handleEditSpeakerBulk}
+            onNameCluster={isRunning ? handleNameCluster : undefined}
+            onRegisterNewSpeaker={isRunning ? handleRegisterNewSpeaker : undefined}
+            onConfirmSuggestion={isRunning ? handleConfirmSuggestion : undefined}
+            onDeleteEntry={handleDeleteEntry}
+          />
+        </section>
+        <LiveAiPanel
+          open={aiPanelOpen}
+          sessionId={status?.session_id || null}
+          hasEntries={entries.length > 0}
+          onClose={() => setAiPanelOpen(false)}
+        />
+      </div>
       {/* Status Bar */}
       <StatusBar status={status} wsConnected={connected} wsReconnecting={reconnecting} />
     </div>

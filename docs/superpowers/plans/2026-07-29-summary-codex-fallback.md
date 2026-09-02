@@ -63,8 +63,9 @@ Cover:
   cleans the temporary directory, and is treated as a provider failure so the
   chain can proceed to Gemini.
 - `codex exec -p gen` receives the prompt through stdin.
-- execution uses `--ephemeral`, `--sandbox read-only`, `--ignore-rules`,
-  `--skip-git-repo-check`, and `--output-last-message`.
+- execution uses `--ephemeral`, `--ignore-user-config`,
+  `--sandbox read-only`, `--ignore-rules`, `--skip-git-repo-check`, and
+  `--output-last-message`.
 - the launch directory is empty.
 - the final-message file is the only content returned.
 - success, non-zero exit, and timeout remove the temporary directory.

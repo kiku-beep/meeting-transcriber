@@ -1,28 +1,41 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getSpeakers, deleteSpeaker, createSpeakerNameOnly, addSpeakerSamples, recomputeEmbedding, recomputeAll, renameSpeaker } from "../lib/apiSpeakers";
 import type { Speaker } from "../lib/types";
 
 export default function Speakers() {
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
   const [registering, setRegistering] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [renamingId, setRenamingId] = useState<string | null>(null);
 
-
-  const refresh = async () => {
+  const refresh = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     try {
       const data = await getSpeakers();
       setSpeakers(data.speakers);
+      setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (showLoading) setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    refresh();
-  }, []);
+    void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!error) return;
+    const retryTimer = window.setInterval(() => {
+      void refresh(false);
+    }, 2000);
+    return () => window.clearInterval(retryTimer);
+  }, [error, refresh]);
 
   const handleCreateNameOnly = async () => {
     if (!name.trim()) {
@@ -73,17 +86,28 @@ export default function Speakers() {
   const handleStartRename = (s: Speaker) => {
     setEditingId(s.id);
     setEditName(s.name);
+    setError("");
   };
 
   const handleRename = async (id: string) => {
-    if (!editName.trim()) return;
+    const trimmedName = editName.trim();
+    if (!trimmedName) {
+      setError("話者名を入力してください");
+      return;
+    }
+    setRenamingId(id);
+    setError("");
     try {
-      await renameSpeaker(id, editName.trim());
+      const result = await renameSpeaker(id, trimmedName);
+      setSpeakers((current) => current.map((speaker) => (
+        speaker.id === id ? result.speaker : speaker
+      )));
       setEditingId(null);
       setEditName("");
-      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRenamingId(null);
     }
   };
 
@@ -108,13 +132,31 @@ export default function Speakers() {
   const needsRecompute = speakers.some((s) => !s.has_embedding && s.sample_count > 0);
 
   return (
-    <div className="p-6 space-y-6 overflow-y-auto h-full">
-      <h2 className="text-lg font-semibold">話者管理</h2>
+    <div className="workspace-page overflow-y-auto h-full">
+      <header className="page-heading">
+        <div><p className="workspace-eyebrow">SPEAKER PROFILES</p><h2>話者管理</h2></div>
+        <span className="page-heading__meta">{speakers.length}人登録</span>
+      </header>
 
       {error && (
-        <div className="p-3 bg-red-900/50 border border-red-700 rounded text-red-300 text-sm flex items-center justify-between">
+        <div role="alert" className="inline-alert inline-alert--error flex items-center justify-between">
           <span>{error}</span>
-          <button onClick={() => setError("")} className="text-red-400 hover:text-red-300 ml-2 shrink-0">&#x2715;</button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => void refresh()}
+              disabled={loading}
+              className="inline-alert__action px-2 py-1"
+            >
+              {loading ? "読み込み中" : "再読み込み"}
+            </button>
+            <button
+              onClick={() => setError("")}
+              className="inline-alert__dismiss"
+              aria-label="エラーを閉じる"
+            >
+              &#x2715;
+            </button>
+          </div>
         </div>
       )}
 
@@ -164,18 +206,20 @@ export default function Speakers() {
             </button>
           )}
         </div>
-        {speakers.length === 0 ? (
+        {loading ? (
+          <p className="text-sm text-slate-500">話者を読み込んでいます...</p>
+        ) : speakers.length === 0 ? (
           <p className="text-sm text-slate-500">話者が登録されていません</p>
         ) : (
           <div className="space-y-2">
             {speakers.map((s) => (
               <div
                 key={s.id}
-                className="flex items-center justify-between p-3 bg-slate-800 rounded border border-slate-700"
+                className="speaker-row"
               >
-                <div className="flex items-center gap-3">
+                <div className="speaker-row__identity">
                   {editingId === s.id ? (
-                    <div className="flex items-center gap-1">
+                    <div className="speaker-rename">
                       <input
                         value={editName}
                         onChange={(e) => setEditName(e.target.value)}
@@ -184,29 +228,26 @@ export default function Speakers() {
                           if (e.key === "Escape") setEditingId(null);
                         }}
                         autoFocus
-                        className="bg-slate-700 border border-cyan-500 rounded px-2 py-0.5 text-sm w-36"
+                        aria-label={`${s.name}の新しい名前`}
+                        className="speaker-rename__input"
                       />
                       <button
                         onClick={() => handleRename(s.id)}
-                        className="text-emerald-400 hover:text-emerald-300 text-sm"
+                        disabled={renamingId === s.id}
+                        className="speaker-action speaker-action--primary"
                       >
-                        ✓
+                        {renamingId === s.id ? "保存中" : "保存"}
                       </button>
                       <button
                         onClick={() => setEditingId(null)}
-                        className="text-slate-400 hover:text-slate-300 text-sm"
+                        disabled={renamingId === s.id}
+                        className="speaker-action"
                       >
-                        ✕
+                        キャンセル
                       </button>
                     </div>
                   ) : (
-                    <span
-                      className="font-medium cursor-pointer hover:text-cyan-400 transition-colors"
-                      onClick={() => handleStartRename(s)}
-                      title="クリックで名前を変更"
-                    >
-                      {s.name}
-                    </span>
+                    <span className="speaker-row__name">{s.name}</span>
                   )}
                   <span className="text-slate-400 text-sm">サンプル: {s.sample_count}個</span>
                   {s.has_embedding ? (
@@ -217,7 +258,16 @@ export default function Speakers() {
                     <span className="text-slate-500 text-xs">音声未登録</span>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="speaker-row__actions">
+                  {editingId !== s.id && (
+                    <button
+                      onClick={() => handleStartRename(s)}
+                      className="speaker-action"
+                      aria-label={`${s.name}の名前を変更`}
+                    >
+                      名前変更
+                    </button>
+                  )}
                   {!s.has_embedding && s.sample_count > 0 && (
                     <button
                       onClick={() => handleRecompute(s.id)}
@@ -236,7 +286,7 @@ export default function Speakers() {
                   )}
                   <button
                     onClick={() => handleDelete(s.id)}
-                    className="text-red-400 hover:text-red-300 text-sm"
+                    className="speaker-action speaker-action--danger"
                   >
                     削除
                   </button>

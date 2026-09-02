@@ -1,0 +1,15 @@
+{
+  "total_rows": 100,
+  "train_rows": 90,
+  "validation_rows": 10,
+  "changed_rows": 46,
+  "unchanged_rows": 54,
+  "total_duration_s": 611.955,
+  "review_csv": "training_data\\review_samples_recent\\review.csv",
+  "manifest_jsonl": "training_data\\review_samples_recent\\manifest.jsonl",
+  "train_jsonl": "training_data\\review_samples_recent\\train.jsonl",
+  "validation_jsonl": "training_data\\review_samples_recent\\validation.jsonl",
+  "validation_ratio": 0.1,
+  "seed": 42,
+  "changed_only": false
+}
