@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "transcriber-backend",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000"],
+      "port": 8000,
+      "cwd": "."
+    },
+    {
+      "name": "transcriber-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 1430,
+      "cwd": "tauri-app"
+    }
+  ]
+}
