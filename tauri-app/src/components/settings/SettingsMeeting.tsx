@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { getMeetingConfig, setMeetingConfig } from "../../lib/apiConfig";
+import {
+  getMeetingConfig,
+  getTopicTreeConfig,
+  setMeetingConfig,
+  setTopicTreeConfig,
+  type TopicTreeConfig,
+} from "../../lib/apiConfig";
+
+// 1回の更新に実測20〜35秒かかるため、下限は30秒（サーバ側でも弾く）。
+const INTERVAL_OPTIONS = [60, 90, 120, 180, 300];
 
 interface ToggleItem {
   key: "call_notification_enabled" | "audio_saving_enabled";
@@ -26,6 +35,10 @@ export default function SettingsMeeting() {
     screenshot_enabled: true,
     audio_saving_enabled: true,
   });
+  const [topicConfig, setTopicConfig] = useState<TopicTreeConfig>({
+    topic_tree_enabled: false,
+    topic_tree_interval_s: 90,
+  });
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -36,6 +49,12 @@ export default function SettingsMeeting() {
         setLoaded(true);
       })
       .catch(() => setLoaded(true));
+
+    getTopicTreeConfig()
+      .then(setTopicConfig)
+      .catch(() => {
+        // 既定値のまま表示する（古いbackendでも設定画面を壊さない）。
+      });
   }, []);
 
   const handleToggle = async (key: ToggleItem["key"]) => {
@@ -43,6 +62,17 @@ export default function SettingsMeeting() {
     try {
       const result = await setMeetingConfig({ [key]: !config[key] });
       setConfig(result);
+    } catch {
+      // silently fail
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTopicChange = async (patch: Partial<TopicTreeConfig>) => {
+    setSaving(true);
+    try {
+      setTopicConfig(await setTopicTreeConfig(patch));
     } catch {
       // silently fail
     } finally {
@@ -77,6 +107,51 @@ export default function SettingsMeeting() {
           </div>
         </div>
       ))}
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => handleTopicChange({ topic_tree_enabled: !topicConfig.topic_tree_enabled })}
+          disabled={saving}
+          className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+            topicConfig.topic_tree_enabled ? "bg-cyan-600" : "bg-slate-600"
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+              topicConfig.topic_tree_enabled ? "translate-x-[18px]" : "translate-x-[2px]"
+            }`}
+          />
+        </button>
+        <div className="min-w-0">
+          <span className="text-sm text-slate-300">論点ツリー</span>
+          <span className="text-xs text-slate-500 ml-2">
+            会議中に論点を自動抽出（次の録音から有効・AI利用枠を消費）
+          </span>
+        </div>
+      </div>
+
+      {topicConfig.topic_tree_enabled && (
+        <div className="flex items-center gap-3 pl-12">
+          <label className="text-xs text-slate-500" htmlFor="topic-tree-interval">
+            更新間隔
+          </label>
+          <select
+            id="topic-tree-interval"
+            value={topicConfig.topic_tree_interval_s}
+            disabled={saving}
+            onChange={(event) =>
+              handleTopicChange({ topic_tree_interval_s: Number(event.target.value) })
+            }
+            className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300"
+          >
+            {INTERVAL_OPTIONS.map((seconds) => (
+              <option key={seconds} value={seconds}>
+                {seconds}秒
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
     </section>
   );
 }

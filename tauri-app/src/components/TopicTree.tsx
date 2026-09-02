@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 import { getSessionStatus } from "../lib/apiSession";
-import { fetchTopics, refreshTopics } from "../lib/apiTopics";
+import { fetchTopics, refreshTopics, type TopicRefreshStatus } from "../lib/apiTopics";
 import { useWebSocket } from "../lib/useWebSocket";
-import type { SessionInfo, TopicNode as TopicNodeData, TopicTree as TopicTreeData } from "../lib/types";
-import TopicNode from "./topics/TopicNode";
+import type { SessionInfo, TopicTree as TopicTreeData } from "../lib/types";
+import TopicTreeView from "./topics/TopicTreeView";
 
 const EMPTY_TREE: TopicTreeData = { nodes: [], active: null };
+
+// 「更新なし」をひとまとめにすると、機能OFFやLLM失敗を取り違える。
+// 失敗はサーバが500で返すので error 側に出る。
+const REFRESH_MESSAGES: Record<TopicRefreshStatus, string> = {
+  updated: "更新しました",
+  no_new_entries: "新しい発話が足りません",
+  busy: "他で実行中",
+  disabled: "論点ツリーが無効です（設定でONにしてください）",
+};
 
 function isRecording(status: SessionInfo | null): boolean {
   return status?.status === "starting" || status?.status === "running" || status?.status === "paused";
@@ -68,10 +77,13 @@ export default function TopicTree() {
     try {
       const result = await refreshTopics();
       if (result.conflict) {
-        setRefreshMessage("他で実行中");
+        setRefreshMessage(REFRESH_MESSAGES.busy);
       } else {
         setTree(result.tree);
-        setRefreshMessage(result.updated ? "更新しました" : "新しい論点はありません");
+        setRefreshMessage(
+          (result.status && REFRESH_MESSAGES[result.status]) ??
+            (result.updated ? REFRESH_MESSAGES.updated : REFRESH_MESSAGES.no_new_entries),
+        );
       }
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "論点ツリーを更新できませんでした");
@@ -80,42 +92,6 @@ export default function TopicTree() {
     }
   }, []);
 
-  const nodesById = new Set(tree.nodes.map((node) => node.id));
-  const childrenByParent = new Map<string, TopicNodeData[]>();
-  tree.nodes.forEach((node) => {
-    if (node.parent === null) return;
-    const children = childrenByParent.get(node.parent) ?? [];
-    children.push(node);
-    childrenByParent.set(node.parent, children);
-  });
-  const roots = tree.nodes.filter((node) => node.parent === null || !nodesById.has(node.parent));
-
-  // roots から到達できるノードを純粋に求める（レンダー中に共有stateを
-  // 書き換えると StrictMode の二重レンダーで2回目に何も描画されない）。
-  const reachable = new Set<string>();
-  const stack = roots.map((node) => node.id);
-  while (stack.length > 0) {
-    const id = stack.pop() as string;
-    if (reachable.has(id)) continue;
-    reachable.add(id);
-    (childrenByParent.get(id) ?? []).forEach((child) => stack.push(child.id));
-  }
-  // 循環だけで構成され roots から辿れないノードも取りこぼさず出す。
-  // ただし各連結成分の入口だけを出す（全部を並べると子として描いたものが
-  // もう一度トップレベルにも出て二重表示になる）。
-  const detachedSeen = new Set<string>();
-  const detached: TopicNodeData[] = [];
-  tree.nodes.forEach((node) => {
-    if (reachable.has(node.id) || detachedSeen.has(node.id)) return;
-    detached.push(node);
-    const walk = [node.id];
-    while (walk.length > 0) {
-      const id = walk.pop() as string;
-      if (detachedSeen.has(id)) continue;
-      detachedSeen.add(id);
-      (childrenByParent.get(id) ?? []).forEach((child) => walk.push(child.id));
-    }
-  });
   const hasNodes = tree.nodes.length > 0;
 
   return (
@@ -149,26 +125,7 @@ export default function TopicTree() {
             <span>{isRecording(sessionStatus) ? "会議の内容がまとまると、ここに論点が追加されます。" : "録音中の会議から、話題の流れを整理します。"}</span>
           </div>
         ) : (
-          <div className="topic-tree" role="tree" aria-label="論点ツリー">
-            {roots.map((node) => (
-              <TopicNode
-                key={node.id}
-                node={node}
-                childrenByParent={childrenByParent}
-                activeId={tree.active}
-                path={new Set()}
-              />
-            ))}
-            {detached.map((node) => (
-              <TopicNode
-                key={node.id}
-                node={node}
-                childrenByParent={childrenByParent}
-                activeId={tree.active}
-                path={new Set()}
-              />
-            ))}
-          </div>
+          <TopicTreeView tree={tree} />
         )}
       </section>
     </div>

@@ -37,6 +37,13 @@ async function installApiRoutes(page: import("@playwright/test").Page, options?:
   let refreshStatus = 200;
   let refreshRequests = 0;
 
+  // page.route はWebSocketを傍受しない。127.0.0.1:8000 に本物のbackendが
+  // 起動していると、WSが status:"idle" を push してモックしたRESTの状態を
+  // 上書きし、テストがマシンの状態次第で落ちる。WSも必ず握る。
+  await page.routeWebSocket(/\/ws\/transcript/, (ws) => {
+    ws.send(JSON.stringify({ type: "status", data: options?.status ?? runningStatus }));
+  });
+
   await page.route("http://127.0.0.1:8000/api/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/health") {
@@ -76,7 +83,7 @@ async function installApiRoutes(page: import("@playwright/test").Page, options?:
           end_sec: 110,
         }],
       };
-      return route.fulfill({ json: { updated: true, tree } });
+      return route.fulfill({ json: { updated: true, status: "updated", tree } });
     }
     return route.fulfill({ json: {} });
   });

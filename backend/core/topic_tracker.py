@@ -26,6 +26,21 @@ logger = logging.getLogger(__name__)
 GenerateFunction = Callable[[str], Awaitable[dict]]
 _VALID_ENGINES = {"codex-cli", "gemini", "claude-code"}
 
+# refresh_now() の結果。以前は bool を返していたため「新規発話が足りない」
+# 「周期ループが実行中」「機能OFF」「LLMが失敗した」がすべて False に潰れ、
+# 画面から区別できなかった（UIが「更新なし」と出している裏でLLMが壊れていても
+# 分からない）。失敗は False ではなく例外で表現し、残りを状態で返す。
+REFRESH_UPDATED = "updated"
+REFRESH_NO_NEW_ENTRIES = "no_new_entries"
+REFRESH_BUSY = "busy"
+REFRESH_DISABLED = "disabled"
+REFRESH_STATUSES = (
+    REFRESH_UPDATED,
+    REFRESH_NO_NEW_ENTRIES,
+    REFRESH_BUSY,
+    REFRESH_DISABLED,
+)
+
 
 class TopicTracker:
     """Maintain a topic tree by periodically processing new transcript entries."""
@@ -119,20 +134,28 @@ class TopicTracker:
         self._task = None
         logger.info("TopicTracker stopped")
 
-    async def refresh_now(self) -> bool:
-        """Run one immediate update, returning whether it was applied."""
-        if not self.enabled or self._refresh_lock.locked():
-            return False
+    async def refresh_now(self) -> str:
+        """Run one immediate update and return why it did or did not apply.
+
+        戻り値は REFRESH_STATUSES のいずれか。プロバイダ失敗は状態にせず
+        例外をそのまま呼び出し側へ投げる（呼び出し側が500等で見せられるように）。
+        バックオフの更新だけは投げる前に済ませる。
+        """
+        if not self.enabled:
+            return REFRESH_DISABLED
+        if self._refresh_lock.locked():
+            return REFRESH_BUSY
 
         async with self._refresh_lock:
             try:
-                return await self._refresh_once()
+                applied = await self._refresh_once()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 self._handle_failure()
                 logger.warning("TopicTracker immediate refresh failed", exc_info=True)
-                return False
+                raise
+        return REFRESH_UPDATED if applied else REFRESH_NO_NEW_ENTRIES
 
     async def _run_loop(self) -> None:
         """Wait between updates and keep retrying after provider failures."""

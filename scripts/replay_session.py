@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.config import Settings  # noqa: E402
-from backend.core.topic_tracker import TopicTracker  # noqa: E402
+from backend.core.topic_tracker import REFRESH_UPDATED, TopicTracker  # noqa: E402
 from backend.core.topic_tree import tree_to_dict  # noqa: E402
 
 
@@ -55,10 +55,9 @@ async def replay(args: argparse.Namespace) -> dict:
     settings = build_settings(args)
     tracker = TopicTracker(settings)
 
-    # refresh_now() は失敗を内部で飲んで False を返すため、戻り値だけでは
-    # 「新規発話が足りない」と「LLMが壊れている」を区別できない。
-    # リプレイが偽陰性（1回も回っていないのに成功に見える）にならないよう、
-    # 先にプロバイダへ素の1回を投げて疎通を確かめる。
+    # 疎通できないまま19ラウンド回して全滅させないよう、先にプロバイダへ
+    # 素の1回を投げて確かめる。（かつてここが無く、失敗を飲んで False を返す
+    # refresh_now を叩いていたため「LLMが1回も動いていないのに失敗0」と表示された）
     try:
         await tracker._get_generator()("次の1語だけ返してください: OK")
     except Exception as exc:
@@ -101,9 +100,11 @@ async def replay(args: argparse.Namespace) -> dict:
 
         t0 = time.monotonic()
         try:
-            updated = await tracker.refresh_now()
+            status = await tracker.refresh_now()
+            updated = status == REFRESH_UPDATED
             error = None
         except Exception as exc:  # リプレイは1回の失敗で止めない
+            status = "error"
             updated = False
             error = f"{type(exc).__name__}: {exc}"
         wall = time.monotonic() - t0
@@ -116,6 +117,7 @@ async def replay(args: argparse.Namespace) -> dict:
             "at_min": round(window_end / 60, 1),
             "new_entries": len(batch),
             "updated": bool(updated),
+            "status": status,
             "wall_s": round(wall, 1),
             "nodes": len(tree.nodes),
             "top_level": len(top_level),
@@ -126,7 +128,7 @@ async def replay(args: argparse.Namespace) -> dict:
         iterations.append(row)
         print(
             f"[{row['at_min']:>5.1f}min] +{row['new_entries']:>3d}発話 "
-            f"updated={str(row['updated']):5s} {row['wall_s']:>5.1f}s "
+            f"status={row['status']:14s} {row['wall_s']:>5.1f}s "
             f"nodes={row['nodes']:>3d} top={row['top_level']:>2d} "
             f"decided={row['decided']:>2d} active={active}"
             + (f" ERROR {error}" if error else ""),

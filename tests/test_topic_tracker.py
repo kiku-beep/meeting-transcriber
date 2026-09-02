@@ -183,7 +183,7 @@ def test_stop_cancels_task_and_clears_task_reference():
 
 
 def test_refresh_now_runs_without_waiting_and_guards_concurrent_calls():
-    from backend.core.topic_tracker import TopicTracker
+    from backend.core.topic_tracker import REFRESH_BUSY, REFRESH_UPDATED, TopicTracker
 
     async def scenario():
         started = asyncio.Event()
@@ -199,16 +199,16 @@ def test_refresh_now_runs_without_waiting_and_guards_concurrent_calls():
         first = asyncio.create_task(tracker.refresh_now())
         await asyncio.wait_for(started.wait(), timeout=1)
 
-        assert await tracker.refresh_now() is False
+        assert await tracker.refresh_now() == REFRESH_BUSY
         release.set()
-        assert await first is True
+        assert await first == REFRESH_UPDATED
         await tracker.stop()
 
     asyncio.run(scenario())
 
 
 def test_transcript_entry_and_dict_are_both_supported():
-    from backend.core.topic_tracker import TopicTracker
+    from backend.core.topic_tracker import REFRESH_UPDATED, TopicTracker
     from backend.models.schemas import TranscriptEntry
 
     async def scenario():
@@ -221,12 +221,12 @@ def test_transcript_entry_and_dict_are_both_supported():
 
         tracker = TopicTracker(_settings(topic_tree_interval_s=100), fake_generate)
         tracker.start([TranscriptEntry(text="モデル発話", timestamp_start=0, timestamp_end=1)])
-        assert await tracker.refresh_now() is True
+        assert await tracker.refresh_now() == REFRESH_UPDATED
         await tracker.stop()
 
         tracker = TopicTracker(_settings(topic_tree_interval_s=100), fake_generate)
         tracker.start([_entry(2, "辞書発話")])
-        assert await tracker.refresh_now() is True
+        assert await tracker.refresh_now() == REFRESH_UPDATED
         await tracker.stop()
 
         assert calls == 2
@@ -235,7 +235,7 @@ def test_transcript_entry_and_dict_are_both_supported():
 
 
 def test_colliding_llm_id_is_reserved_instead_of_lost():
-    from backend.core.topic_tracker import TopicTracker
+    from backend.core.topic_tracker import REFRESH_UPDATED, TopicTracker
 
     async def scenario():
         calls = 0
@@ -252,9 +252,9 @@ def test_colliding_llm_id_is_reserved_instead_of_lost():
         tracker = TopicTracker(_settings(topic_tree_interval_s=100), fake_generate)
         tracker.start(entries)
 
-        assert await tracker.refresh_now() is True
+        assert await tracker.refresh_now() == REFRESH_UPDATED
         entries.append(_entry(2, "二つ目"))
-        assert await tracker.refresh_now() is True
+        assert await tracker.refresh_now() == REFRESH_UPDATED
         assert calls == 2
         assert [node.id for node in tracker.tree.nodes] == ["n1", "t1"]
         await tracker.stop()
@@ -438,3 +438,52 @@ def test_malformed_entry_does_not_stall_the_tracker():
 
     assert before >= 1, "正常系で1回も更新されていない"
     assert after > before, "NaN混入後に更新が止まっている（永久停止）"
+
+
+def test_refresh_now_distinguishes_disabled_insufficient_and_failure():
+    """refresh_now は「更新なし」の理由を潰さず、LLM失敗は例外で返す。
+
+    以前は4状態すべてが False に潰れていたため、UIが「更新なし」と表示している
+    裏でプロバイダが壊れていても誰も気づけなかった。
+    """
+    from backend.core.topic_tracker import (
+        REFRESH_DISABLED,
+        REFRESH_NO_NEW_ENTRIES,
+        REFRESH_UPDATED,
+        TopicTracker,
+    )
+
+    async def scenario():
+        async def ok_generate(prompt: str) -> dict:
+            return {"content": "{}", "usage": {}}
+
+        async def broken_generate(prompt: str) -> dict:
+            raise RuntimeError("provider failed")
+
+        # 機能OFF
+        off = TopicTracker(_settings(topic_tree_enabled=False), ok_generate)
+        off.start([_entry(0)])
+        assert await off.refresh_now() == REFRESH_DISABLED
+
+        # 新規発話が最小件数に届かない
+        thin = TopicTracker(
+            _settings(topic_tree_interval_s=100, topic_tree_min_new_entries=5),
+            ok_generate,
+        )
+        thin.start([_entry(0)])
+        assert await thin.refresh_now() == REFRESH_NO_NEW_ENTRIES
+        await thin.stop()
+
+        # LLM失敗は状態ではなく例外。バックオフは投げる前に進む
+        broken = TopicTracker(_settings(topic_tree_interval_s=100), broken_generate)
+        broken.start([_entry(0)])
+        with pytest.raises(RuntimeError):
+            await broken.refresh_now()
+        assert broken._consecutive_failures == 1
+        assert broken._backoff_s > 0
+        # 失敗してもロックは解放され、次の呼び出しが busy にならない
+        broken._generate_override = ok_generate
+        assert await broken.refresh_now() == REFRESH_UPDATED
+        await broken.stop()
+
+    asyncio.run(scenario())

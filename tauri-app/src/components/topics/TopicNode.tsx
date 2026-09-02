@@ -6,6 +6,8 @@ interface Props {
   activeId: string | null;
   depth?: number;
   path: Set<string>;
+  /** 与えると時刻ボタンが押せる（履歴表示）。ライブ録音中は音声が無いので省略する。 */
+  onSeek?: (seconds: number) => void;
 }
 
 const STATUS_META = {
@@ -28,6 +30,7 @@ export default function TopicNode({
   activeId,
   depth = 0,
   path,
+  onSeek,
 }: Props) {
   if (path.has(node.id)) {
     return <div className="topic-node__guard" role="note">循環を検出しました</div>;
@@ -51,9 +54,14 @@ export default function TopicNode({
         <button
           type="button"
           className="topic-node__time"
-          disabled
-          title="ライブ録音中はシークできません"
-          aria-label={`開始時刻 ${formatTime(node.start_sec)}（ライブ中はシーク不可）`}
+          disabled={!onSeek}
+          onClick={onSeek ? () => onSeek(node.start_sec) : undefined}
+          title={onSeek ? "この時刻から再生" : "ライブ録音中はシークできません"}
+          aria-label={
+            onSeek
+              ? `${formatTime(node.start_sec)} から再生`
+              : `開始時刻 ${formatTime(node.start_sec)}（ライブ中はシーク不可）`
+          }
         >
           {formatTime(node.start_sec)}
         </button>
@@ -74,6 +82,7 @@ export default function TopicNode({
               activeId={activeId}
               depth={depth + 1}
               path={nextPath}
+              onSeek={onSeek}
             />
           ))}
         </div>

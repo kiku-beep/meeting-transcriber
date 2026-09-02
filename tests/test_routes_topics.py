@@ -92,7 +92,7 @@ def test_refresh_topics_calls_tracker(monkeypatch):
         async def refresh_now(self):
             nonlocal calls
             calls += 1
-            return True
+            return "updated"
 
     session = _session(tracker=FakeTracker())
     monkeypatch.setattr(routes_topics, "get_session", lambda: session)
@@ -103,6 +103,7 @@ def test_refresh_topics_calls_tracker(monkeypatch):
     assert response.status_code == 200
     assert calls == 1
     assert response.json()["updated"] is True
+    assert response.json()["status"] == "updated"
     assert response.json()["tree"]["active"] == "topic-1"
 
 
@@ -128,7 +129,7 @@ def test_refresh_topics_returns_200_when_tracker_has_nothing_to_update(monkeypat
         tree = _tree()
 
         async def refresh_now(self):
-            return False
+            return "no_new_entries"
 
     session = _session(tracker=FakeTracker())
     monkeypatch.setattr(routes_topics, "get_session", lambda: session)
@@ -137,7 +138,7 @@ def test_refresh_topics_returns_200_when_tracker_has_nothing_to_update(monkeypat
     response = _client().post("/api/topics/refresh", json={"client_id": "no-op-client"})
 
     assert response.status_code == 200
-    assert response.json() == {"updated": False, "tree": {
+    assert response.json() == {"updated": False, "status": "no_new_entries", "tree": {
         "nodes": [
             {
                 "id": "topic-1",
@@ -179,7 +180,7 @@ def test_refresh_topics_returns_200_noop_when_topic_tree_is_disabled(monkeypatch
         enabled = False
 
         async def refresh_now(self):
-            return False
+            return "disabled"
 
     session = _session(tracker=FakeTracker())
     monkeypatch.setattr(routes_topics, "get_session", lambda: session)
@@ -189,6 +190,7 @@ def test_refresh_topics_returns_200_noop_when_topic_tree_is_disabled(monkeypatch
 
     assert response.status_code == 200
     assert response.json()["updated"] is False
+    assert response.json()["status"] == "disabled"
 
 
 def test_ws_topic_payload_replaces_nonfinite_timestamps():
@@ -208,3 +210,59 @@ def test_ws_topic_payload_replaces_nonfinite_timestamps():
 
     assert payload["nodes"][0]["start_sec"] == 0.0
     assert payload["nodes"][0]["end_sec"] == 0.0
+
+
+def test_get_saved_topics_returns_stored_tree(monkeypatch):
+    from backend.api import routes_topics
+
+    monkeypatch.setattr(
+        routes_topics,
+        "load_topics",
+        lambda session_id: {
+            "nodes": [
+                {
+                    "id": "t1",
+                    "parent": None,
+                    "label": "保存済み論点",
+                    "status": "decided",
+                    "start_sec": 0.0,
+                    "end_sec": 5.0,
+                }
+            ],
+            "active": None,
+        },
+    )
+
+    response = _client().get("/api/topics/session/2026-08-28_120123")
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == "2026-08-28_120123"
+    assert response.json()["tree"]["nodes"][0]["label"] == "保存済み論点"
+
+
+def test_get_saved_topics_returns_404_when_nothing_was_saved(monkeypatch):
+    """機能OFFで録った会議には topics.json が無い。空ツリーではなく404で伝える。"""
+    from backend.api import routes_topics
+
+    monkeypatch.setattr(
+        routes_topics, "load_topics", lambda session_id: {"nodes": [], "active": None}
+    )
+
+    response = _client().get("/api/topics/session/2026-01-01_000000")
+
+    assert response.status_code == 404
+
+
+def test_get_saved_topics_rejects_path_traversal(monkeypatch):
+    from backend.api import routes_topics
+
+    def raising_load(session_id: str):
+        raise ValueError(f"Invalid session_id: {session_id}")
+
+    monkeypatch.setattr(routes_topics, "load_topics", raising_load)
+
+    response = _client().get("/api/topics/session/..%2F..%2Fsecrets")
+
+    assert response.status_code in (400, 404)
+    if response.status_code == 400:
+        assert "不正なセッションID" in response.json()["detail"]
