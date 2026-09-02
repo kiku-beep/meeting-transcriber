@@ -10,6 +10,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from starlette.websockets import WebSocketState
 
+from backend.core.topic_tree import tree_to_dict
 from backend.models.session import (
     get_session,
     get_or_create_session,
@@ -43,6 +44,26 @@ def _sanitize_entry(entry) -> dict:
         "timestamp_end": _safe_float(float(entry.timestamp_end)),
         "refined": getattr(entry, "refined", False),
     }
+
+
+def _sanitize_topic_tree(tree_or_payload) -> dict:
+    """Build a JSON-safe topic-tree payload, handling NaN/Inf timestamps."""
+    payload = (
+        tree_or_payload
+        if isinstance(tree_or_payload, dict)
+        else tree_to_dict(tree_or_payload)
+    )
+    nodes = []
+    for raw_node in payload.get("nodes", []):
+        node = dict(raw_node)
+        for key in ("start_sec", "end_sec"):
+            try:
+                value = float(node.get(key, 0.0))
+            except (TypeError, ValueError, OverflowError):
+                value = 0.0
+            node[key] = value if math.isfinite(value) else 0.0
+        nodes.append(node)
+    return {"nodes": nodes, "active": payload.get("active")}
 
 
 @router.websocket("/ws/transcript")
@@ -117,6 +138,16 @@ async def ws_transcript(ws: WebSocket, client_id: str = Query("default")):
             try:
                 updates = session.refined_queue.get_nowait()
                 await ws.send_json({"type": "update", "data": updates})
+            except asyncio.QueueEmpty:
+                pass
+
+            # Initial state is fetched via GET /api/topics; WS only sends queued updates.
+            try:
+                topic_tree = session.topic_queue.get_nowait()
+                await ws.send_json({
+                    "type": "topic",
+                    "data": _sanitize_topic_tree(topic_tree),
+                })
             except asyncio.QueueEmpty:
                 pass
 
