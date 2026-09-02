@@ -36,7 +36,10 @@ async def get_topics(client_id: str = Query("default")):
     session = _get_client_session(client_id)
     if session is None or session.status not in (SessionStatus.RUNNING, SessionStatus.PAUSED):
         return _empty_tree()
-    return tree_to_dict(session.topic_tree)
+    # error は直近の周期更新の失敗（成功すると None に戻る）。
+    payload = tree_to_dict(session.topic_tree)
+    payload["error"] = getattr(session._topic_tracker, "last_error", None)
+    return payload
 
 
 @router.get("/session/{session_id}")

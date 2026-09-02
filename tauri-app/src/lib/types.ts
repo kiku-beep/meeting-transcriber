@@ -273,6 +273,8 @@ export interface TopicNode {
 export interface TopicTree {
   nodes: TopicNode[];
   active: string | null;
+  /** 直近の周期更新が失敗していればその内容。成功すると null に戻る。 */
+  error?: string | null;
 }
 
 // --- Entry Edit ---

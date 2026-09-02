@@ -63,7 +63,12 @@ def _sanitize_topic_tree(tree_or_payload) -> dict:
                 value = 0.0
             node[key] = value if math.isfinite(value) else 0.0
         nodes.append(node)
-    return {"nodes": nodes, "active": payload.get("active")}
+    sanitized = {"nodes": nodes, "active": payload.get("active")}
+    # 周期更新の失敗を画面へ届ける。これが無いと「論点を抽出中…」のまま
+    # 会議が終わる（実機で6分間気づけなかった）。
+    if "error" in payload:
+        sanitized["error"] = payload["error"]
+    return sanitized
 
 
 @router.websocket("/ws/transcript")

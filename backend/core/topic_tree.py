@@ -11,6 +11,9 @@ from pydantic import BaseModel
 
 MAX_LABEL_LEN = 15
 VALID_STATUSES = ("open", "decided", "parked")
+# 実機（PIVOT 動画 2:00-8:56）で LLM が話の順に前の論点の子へ次々つなげ、
+# 深さ5の一本鎖になった。プロンプトで抑えつつ、超えた分はここで親を繰り上げる。
+MAX_DEPTH = 3
 
 
 class TopicNode(BaseModel):
@@ -77,6 +80,10 @@ def build_patch_prompt(tree: TopicTree, entries: list[dict]) -> str:
 前置き、説明文、コードフェンスは禁止です。JSON以外の文字を出力しないでください。
 最上位の論点は parent を null にしてください（空文字は不可）。
 子の論点は parent に親のidを入れてください。
+階層は最大{MAX_DEPTH}段（最上位・子・孫）です。それより深くしないでください。
+新しい大きなテーマに移ったら parent を null にして最上位に置いてください。
+直前の論点の子にするのは、その論点を具体的に掘り下げている場合だけです。
+話の順番に沿って前の論点の下へ次々つなげないでください。
 新規idは既存のidと衝突しない連番にしてください。
 既存論点の続きなら add せず update してください。
 label は {MAX_LABEL_LEN} 字以内にしてください。
@@ -220,6 +227,29 @@ def _normalize_node(node: TopicNode) -> TopicNode | None:
     )
 
 
+def _depth(node_id: str, lookup: dict[str, TopicNode]) -> int:
+    """Return 1 for a root, 2 for its child, ... (cycle-safe)."""
+    depth = 0
+    seen: set[str] = set()
+    current: str | None = node_id
+    while current is not None and current in lookup and current not in seen:
+        seen.add(current)
+        depth += 1
+        current = lookup[current].parent
+    return depth
+
+
+def _clamp_parent_depth(parent: str | None, lookup: dict[str, TopicNode]) -> str | None:
+    """Re-parent so the new node never exceeds MAX_DEPTH.
+
+    LLMは話の順に直前の論点の子へ次々つなぎ、一本鎖を作る。子として置く
+    深さが MAX_DEPTH を超える場合は、収まる祖先まで繰り上げる。
+    """
+    while parent is not None and parent in lookup and _depth(parent, lookup) >= MAX_DEPTH:
+        parent = lookup[parent].parent
+    return parent
+
+
 def apply_patch(tree: TopicTree, patch: TopicPatch) -> TopicTree:
     """Return a new tree after safely applying a topic-tree patch."""
 
@@ -237,16 +267,17 @@ def apply_patch(tree: TopicTree, patch: TopicPatch) -> TopicTree:
         reserved_ids.add(normalized.id)
         candidates.append(normalized)
 
-    known_ids = set(existing_ids)
+    accepted: dict[str, TopicNode] = {node.id: node for node in existing_nodes}
     pending = list(candidates)
     added_by_id: dict[str, TopicNode] = {}
     while pending:
         next_pending: list[TopicNode] = []
         progress = False
         for node in pending:
-            if node.parent is None or node.parent in known_ids:
+            if node.parent is None or node.parent in accepted:
+                node.parent = _clamp_parent_depth(node.parent, accepted)
+                accepted[node.id] = node
                 added_by_id[node.id] = node
-                known_ids.add(node.id)
                 progress = True
             else:
                 next_pending.append(node)

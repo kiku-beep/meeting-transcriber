@@ -593,3 +593,29 @@ def test_build_patch_prompt_tells_the_model_to_use_null_for_root():
     assert '"parent":null' in prompt
     assert '"parent":""' not in prompt, "空文字を例示するとLLMがrootに空文字を返す"
     assert "null" in prompt
+
+
+def test_apply_patch_clamps_chain_depth_to_max_depth():
+    """LLMが話の順に一本鎖を作っても、深さ MAX_DEPTH（3段）に収める。
+
+    実機（PIVOT動画）で t1→t2→t3→t4→t5 の鎖になり、見た目が階層ではなく
+    時系列の階段になった。超えた分は収まる祖先へ繰り上げる。
+    """
+    from backend.core.topic_tree import MAX_DEPTH, TopicNode, TopicPatch, TopicTree, apply_patch
+
+    assert MAX_DEPTH == 3
+    patch = TopicPatch(add=[
+        TopicNode(id="t1", parent=None, label="金融政策"),
+        TopicNode(id="t2", parent="t1", label="経済データ"),
+        TopicNode(id="t3", parent="t2", label="消費者物価"),
+        TopicNode(id="t4", parent="t3", label="原油価格"),
+        TopicNode(id="t5", parent="t4", label="中国の需要"),
+    ])
+    tree = apply_patch(TopicTree(), patch)
+    parents = {n.id: n.parent for n in tree.nodes}
+    # t4 は t3(深さ3)の子になれないので t2 の下へ、t5 も同様に t2 の下へ
+    assert parents == {"t1": None, "t2": "t1", "t3": "t2", "t4": "t2", "t5": "t2"}
+
+    # 別パッチで既存の葉（深さ3）に子を付けても同じ
+    later = apply_patch(tree, TopicPatch(add=[TopicNode(id="t6", parent="t3", label="孫の孫")]))
+    assert {n.id: n.parent for n in later.nodes}["t6"] == "t2"

@@ -507,7 +507,8 @@ export default function History({ autoSummarizeSessionId, onAutoSummarizeComplet
               ) : subTab === "topics" ? (
                 savedTopics && (
                   <TopicTreeView
-                    tree={savedTopics}
+                    // 終わった会議に「いま話している論点」は無い
+                    tree={{ ...savedTopics, active: null }}
                     onSeek={hasAudio ? handlePlayFromEntry : undefined}
                   />
                 )

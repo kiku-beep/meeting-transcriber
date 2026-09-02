@@ -69,6 +69,7 @@ class TopicTracker:
         self._refresh_lock = asyncio.Lock()
         self._consecutive_failures = 0
         self._backoff_s = 0.0
+        self._last_error: str | None = None
 
         self._refresh_config()
 
@@ -81,6 +82,17 @@ class TopicTracker:
     def topic_queue(self) -> asyncio.Queue[dict]:
         """Return the queue used for later WebSocket distribution."""
         return self._topic_queue
+
+    @property
+    def last_error(self) -> str | None:
+        """Return the most recent provider failure, or None after a success."""
+        return self._last_error
+
+    def snapshot(self) -> dict:
+        """Return the tree payload with the last error attached for clients."""
+        payload = tree_to_dict(self._tree)
+        payload["error"] = self._last_error
+        return payload
 
     def _refresh_config(self) -> None:
         """Refresh tracker settings before arming a session."""
@@ -104,6 +116,7 @@ class TopicTracker:
         self._tree = TopicTree()
         self._consecutive_failures = 0
         self._backoff_s = 0.0
+        self._last_error = None
         self._drain_queue()
 
         if self._task and not self._task.done():
@@ -151,8 +164,8 @@ class TopicTracker:
                 applied = await self._refresh_once()
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                self._handle_failure()
+            except Exception as exc:
+                self._handle_failure(exc)
                 logger.warning("TopicTracker immediate refresh failed", exc_info=True)
                 raise
         return REFRESH_UPDATED if applied else REFRESH_NO_NEW_ENTRIES
@@ -168,8 +181,8 @@ class TopicTracker:
                         await self._refresh_once()
                 except asyncio.CancelledError:
                     raise
-                except Exception:
-                    self._handle_failure()
+                except Exception as exc:
+                    self._handle_failure(exc)
                     logger.warning("TopicTracker refresh failed", exc_info=True)
         except asyncio.CancelledError:
             raise
@@ -194,10 +207,11 @@ class TopicTracker:
         patch = parse_patch(result["content"])
         reserved_patch = reserve_ids(self._tree, patch)
         self._tree = apply_patch(self._tree, reserved_patch)
-        self._topic_queue.put_nowait(tree_to_dict(self._tree))
         self._cursor = end_cursor
         self._consecutive_failures = 0
         self._backoff_s = 0.0
+        self._last_error = None
+        self._topic_queue.put_nowait(self.snapshot())
         return True
 
     def _collect_new_entries(self) -> tuple[list[dict] | None, int]:
@@ -268,7 +282,15 @@ class TopicTracker:
             return summarizer._generate_text_with_claude_code
         raise ValueError(f"unknown topic-tree engine: {self.engine}")
 
-    def _handle_failure(self) -> None:
+    def _handle_failure(self, exc: BaseException) -> None:
+        """Record a provider failure and push it to clients.
+
+        周期ループの失敗はログにしか出ていなかったため、UIは「論点を抽出中…」
+        のまま会議が終わった（実機で確認）。ツリーは変えず error だけ載せて
+        配信し、画面で気づけるようにする。
+        """
+        self._last_error = f"{type(exc).__name__}: {exc}"
+        self._topic_queue.put_nowait(self.snapshot())
         self._consecutive_failures += 1
         if self.interval_s <= 0:
             self._backoff_s = 0.0

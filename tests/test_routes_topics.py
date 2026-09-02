@@ -67,7 +67,22 @@ def test_get_topics_returns_current_tree(monkeypatch):
             }
         ],
         "active": "topic-1",
+        "error": None,
     }
+
+
+def test_get_topics_reports_last_periodic_failure(monkeypatch):
+    """周期ループの失敗は GET でも見える（画面が「抽出中…」のまま固まらないように）。"""
+    from backend.api import routes_topics
+
+    tracker = SimpleNamespace(tree=_tree(), topic_queue=asyncio.Queue(), last_error="RuntimeError: boom")
+    session = _session(tracker=tracker)
+    monkeypatch.setattr(routes_topics, "get_session", lambda: session)
+
+    response = _client().get("/api/topics")
+
+    assert response.status_code == 200
+    assert response.json()["error"] == "RuntimeError: boom"
 
 
 def test_get_topics_returns_empty_tree_when_session_is_not_running(monkeypatch):

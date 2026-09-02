@@ -487,3 +487,42 @@ def test_refresh_now_distinguishes_disabled_insufficient_and_failure():
         await broken.stop()
 
     asyncio.run(scenario())
+
+
+def test_periodic_failure_is_pushed_to_clients_and_cleared_on_success():
+    """周期ループの失敗は topic_queue に error 付きで流れ、成功で消える。
+
+    実機テストで、失敗がログにしか出ず UI が「論点を抽出中…」のまま
+    6分間固まった。ツリーは変えずに error だけ載せて配信する。
+    """
+    from backend.core.topic_tracker import TopicTracker
+
+    async def scenario():
+        fail = True
+
+        async def flaky_generate(prompt: str) -> dict:
+            if fail:
+                raise RuntimeError("OPENAI_API_KEY が設定されています")
+            return {"content": '{"add":[{"id":"t1","parent":null,"label":"復旧"}]}', "usage": {}}
+
+        tracker = TopicTracker(_settings(topic_tree_interval_s=100), flaky_generate)
+        entries = [_entry(0)]
+        tracker.start(entries)
+
+        with pytest.raises(RuntimeError):
+            await tracker.refresh_now()
+        payload = tracker.topic_queue.get_nowait()
+        assert payload["nodes"] == []
+        assert "OPENAI_API_KEY" in payload["error"]
+        assert tracker.last_error == payload["error"]
+
+        fail = False
+        entries.append(_entry(2))
+        await tracker.refresh_now()
+        payload = tracker.topic_queue.get_nowait()
+        assert [n["label"] for n in payload["nodes"]] == ["復旧"]
+        assert payload["error"] is None
+        assert tracker.last_error is None
+        await tracker.stop()
+
+    asyncio.run(scenario())

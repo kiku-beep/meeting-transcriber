@@ -28,9 +28,12 @@ export default function TopicTree() {
   const [error, setError] = useState("");
   const [refreshMessage, setRefreshMessage] = useState("");
 
+  // 周期更新の失敗もこの経路で届く（error 付きのツリー）。ツリーの中身は
+  // 変わらないので置き換えて問題ない。成功すると error が消えるので晴れる。
   const handleTopic = useCallback((nextTree: TopicTreeData) => {
     setTree(nextTree);
     setLoading(false);
+    setError(nextTree.error ? `自動更新に失敗しています: ${nextTree.error}` : "");
   }, []);
 
   const handleStatus = useCallback((nextStatus: SessionInfo) => {
@@ -50,7 +53,9 @@ export default function TopicTree() {
 
     fetchTopics()
       .then((initialTree) => {
-        if (!cancelled) setTree(initialTree);
+        if (cancelled) return;
+        setTree(initialTree);
+        if (initialTree.error) setError(`自動更新に失敗しています: ${initialTree.error}`);
       })
       .catch((reason: unknown) => {
         if (!cancelled) setError(reason instanceof Error ? reason.message : "論点ツリーを取得できませんでした");
