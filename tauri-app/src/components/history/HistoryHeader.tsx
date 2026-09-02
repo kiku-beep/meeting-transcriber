@@ -16,8 +16,10 @@ interface Props {
   onRename: (newName: string) => Promise<void>;
   error: string;
   onClearError: () => void;
-  subTab: "transcript" | "summary";
-  onSubTabChange: (tab: "transcript" | "summary") => void;
+  subTab: "transcript" | "summary" | "topics";
+  onSubTabChange: (tab: "transcript" | "summary" | "topics") => void;
+  /** 論点ツリーが保存されている会議だけタブを出す（機能OFFで録った会議には無い）。 */
+  hasTopics?: boolean;
 }
 
 export default function HistoryHeader({
@@ -30,6 +32,7 @@ export default function HistoryHeader({
   onClearError,
   subTab,
   onSubTabChange,
+  hasTopics = false,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
@@ -140,6 +143,14 @@ export default function HistoryHeader({
         >
           要約
         </button>
+        {hasTopics && (
+          <button
+            onClick={() => onSubTabChange("topics")}
+            className={`history-header__tab px-3 py-1 text-sm ${subTab === "topics" ? "history-header__tab--active" : ""}`}
+          >
+            論点
+          </button>
+        )}
       </div>
     </div>
   );

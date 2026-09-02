@@ -5,16 +5,18 @@ import { generateSummary, getSummary } from "../lib/apiSummary";
 import { getSpeakers } from "../lib/apiSpeakers";
 import { fetchAudioBlobUrl, getAudioInfo, deleteAudio, compressAudio, toggleBookmark } from "../lib/apiPlayback";
 import { listScreenshots } from "../lib/apiScreenshots";
+import { fetchSavedTopics } from "../lib/apiTopics";
 import { useAudioPlayer } from "../lib/useAudioPlayer";
 import { isTauriRuntime } from "../lib/api";
 import { isBackendConnectionError, waitForBackendHealth } from "../lib/apiHealth";
-import type { TranscriptEntry, TranscriptSession, SummaryResult, Speaker } from "../lib/types";
+import type { TranscriptEntry, TranscriptSession, SummaryResult, Speaker, TopicTree as TopicTreeData } from "../lib/types";
 import HistoryHeader from "./history/HistoryHeader";
 import SessionList from "./history/SessionList";
 import TranscriptView from "./history/TranscriptView";
 import SummaryView from "./history/SummaryView";
 import ScreenshotPanel from "./history/ScreenshotPanel";
 import PlayerBar from "./playback/PlayerBar";
+import TopicTreeView from "./topics/TopicTreeView";
 
 interface Props {
   autoSummarizeSessionId: string | null;
@@ -32,7 +34,8 @@ function sleep(ms: number): Promise<void> {
 export default function History({ autoSummarizeSessionId, onAutoSummarizeComplete }: Props) {
   const [sessions, setSessions] = useState<TranscriptSession[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [subTab, setSubTab] = useState<"transcript" | "summary">("transcript");
+  const [subTab, setSubTab] = useState<"transcript" | "summary" | "topics">("transcript");
+  const [savedTopics, setSavedTopics] = useState<TopicTreeData | null>(null);
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [summary, setSummary] = useState("");
@@ -181,6 +184,7 @@ export default function History({ autoSummarizeSessionId, onAutoSummarizeComplet
       setSearchQuery("");
       setHasAudio(false);
       setHasScreenshots(false);
+      setSavedTopics(null);
       setActiveTranscriptTime(null);
       playerActions.destroy();
       return;
@@ -190,13 +194,20 @@ export default function History({ autoSummarizeSessionId, onAutoSummarizeComplet
     let cancelled = false;
 
     const load = async () => {
-      const [transcriptResult, summaryResult, audioInfoResult, screenshotsResult] = await Promise.allSettled([
-        getTranscript(selectedId),
-        getSummary(selectedId),
-        getAudioInfo(selectedId),
-        listScreenshots(selectedId),
-      ]);
+      const [transcriptResult, summaryResult, audioInfoResult, screenshotsResult, topicsResult] =
+        await Promise.allSettled([
+          getTranscript(selectedId),
+          getSummary(selectedId),
+          getAudioInfo(selectedId),
+          listScreenshots(selectedId),
+          fetchSavedTopics(selectedId),
+        ]);
       if (cancelled) return;
+
+      // 論点ツリーは機能ONで録った会議にしか無い。無ければタブも出さない。
+      setSavedTopics(
+        topicsResult.status === "fulfilled" ? topicsResult.value : null,
+      );
 
       if (transcriptResult.status === "fulfilled") {
         setEntries(transcriptResult.value.entries);
@@ -250,6 +261,11 @@ export default function History({ autoSummarizeSessionId, onAutoSummarizeComplet
 
     return () => { cancelled = true; };
   }, [selectedId]);
+
+  // 論点ツリーが無い会議へ切り替えたとき、空のタブに取り残されないよう戻す。
+  useEffect(() => {
+    if (subTab === "topics" && !savedTopics) setSubTab("transcript");
+  }, [savedTopics, subTab]);
 
   useEffect(() => {
     if (subTab !== "transcript") return;
@@ -466,6 +482,7 @@ export default function History({ autoSummarizeSessionId, onAutoSummarizeComplet
             onClearError={() => setError("")}
             subTab={subTab}
             onSubTabChange={setSubTab}
+            hasTopics={savedTopics !== null}
           />
 
           <div className="flex flex-1 overflow-hidden">
@@ -487,6 +504,13 @@ export default function History({ autoSummarizeSessionId, onAutoSummarizeComplet
                   onToggleBookmark={handleToggleBookmark}
                   onDeleteEntry={handleDeleteEntry}
                 />
+              ) : subTab === "topics" ? (
+                savedTopics && (
+                  <TopicTreeView
+                    tree={savedTopics}
+                    onSeek={hasAudio ? handlePlayFromEntry : undefined}
+                  />
+                )
               ) : (
                 <SummaryView
                   onGenerate={handleGenerate}

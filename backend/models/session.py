@@ -16,9 +16,11 @@ from backend.core.speaker_cluster import SessionClusterManager
 from backend.models.audio_stream import AudioStreamManager
 from backend.models.pipeline import TranscriptionPipeline
 from backend.models.schemas import SessionStatus, TranscriptEntry
+from backend.core.topic_tree import TopicTree
 from backend.storage.file_store import save_session
 from backend.core.segmentation_refiner import should_run_segmentation_refinement
 from backend.core.text_refiner import TextRefiner
+from backend.core.topic_tracker import TopicTracker
 from backend.storage.dictionary_store import get_dictionary_store
 from backend.storage.speaker_store import get_speaker_store
 
@@ -103,6 +105,7 @@ class TranscriptionSession:
         self._refiner_task: asyncio.Task | None = None
         self._text_refiner = TextRefiner(settings, get_dictionary_store())
         self._text_refiner_task: asyncio.Task | None = None
+        self._topic_tracker = TopicTracker(settings)
         self._has_loopback: bool = False
         self._automatic_loopback_devices: bool = True
 
@@ -112,6 +115,14 @@ class TranscriptionSession:
     @property
     def refined_queue(self) -> asyncio.Queue:
         return self._text_refiner._refined_queue
+
+    @property
+    def topic_queue(self) -> asyncio.Queue:
+        return self._topic_tracker.topic_queue
+
+    @property
+    def topic_tree(self) -> TopicTree:
+        return self._topic_tracker.tree
 
     @property
     def info(self) -> dict:
@@ -191,6 +202,7 @@ class TranscriptionSession:
 
             # Start text refinement (Pass 2 — Gemini Flash)
             self._text_refiner.start(self.entries)
+            self._topic_tracker.start(self.entries)
             self._start_audio_autosave()
 
             self.status = SessionStatus.RUNNING
@@ -307,6 +319,18 @@ class TranscriptionSession:
                     pass
             self._refiner_task = None
 
+        # Bound the final LLM refresh so a slow provider cannot block shutdown
+        # longer than the configured interval, capped at two minutes; keep a
+        # one-second floor because wait_for(0) would cancel immediately.
+        topic_timeout_s = min(max(float(settings.topic_tree_interval_s), 1.0), 120.0)
+        try:
+            await asyncio.wait_for(
+                self._topic_tracker.refresh_now(), timeout=topic_timeout_s
+            )
+        except Exception:
+            logger.warning("Final topic tree refresh failed", exc_info=True)
+        await self._topic_tracker.stop()
+
         await self._text_refiner.stop(refine_pending=True)
 
         await self._update_speaker_profiles()
@@ -317,7 +341,15 @@ class TranscriptionSession:
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "session_name": self.session_name,
         }
-        save_session(self.session_id, self.entries, meta)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            save_session,
+            self.session_id,
+            self.entries,
+            meta,
+            self.topic_tree,
+        )
 
         if self._has_recorded_audio() and settings.audio_saving_enabled:
             loop = asyncio.get_event_loop()
@@ -385,6 +417,7 @@ class TranscriptionSession:
                 pass
             self._refiner_task = None
 
+        await self._topic_tracker.stop()
         await self._text_refiner.stop(refine_pending=False)
 
         # Delete any screenshots already saved for this session

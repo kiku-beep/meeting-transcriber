@@ -1,22 +1,23 @@
 import { useState, useCallback, useEffect } from "react";
 import BackendLoader from "./components/BackendLoader";
 import Transcription from "./components/Transcription";
+import TopicTree from "./components/TopicTree";
 import Speakers from "./components/Speakers";
 import Dictionary from "./components/Dictionary";
 import History from "./components/History";
 import Settings from "./components/Settings";
 
-const TABS = ["文字起こし", "話者", "辞書", "履歴", "設定"] as const;
+const TABS = ["文字起こし", "論点", "話者", "辞書", "履歴", "設定"] as const;
 
 export default function App() {
   const [backendReady, setBackendReady] = useState(false);
   const [activeTab, setActiveTab] = useState(0);
-  const [visitedTabs, setVisitedTabs] = useState<Set<number>>(new Set([0, 3]));
+  const [visitedTabs, setVisitedTabs] = useState<Set<number>>(new Set([0, 4]));
   const [autoSummarizeSessionId, setAutoSummarizeSessionId] = useState<string | null>(null);
 
   const handleSessionStop = useCallback((sessionId: string) => {
     setAutoSummarizeSessionId(sessionId);
-    setActiveTab(3); // History tab
+    setActiveTab(4); // History tab
   }, []);
 
   const handleAutoSummarizeComplete = useCallback(() => {
@@ -59,24 +60,29 @@ export default function App() {
         </div>
         {visitedTabs.has(1) && (
           <div className={activeTab === 1 ? "h-full" : "hidden"}>
-            <Speakers />
+            <TopicTree />
           </div>
         )}
         {visitedTabs.has(2) && (
           <div className={activeTab === 2 ? "h-full" : "hidden"}>
-            <Dictionary />
+            <Speakers />
           </div>
         )}
         {visitedTabs.has(3) && (
           <div className={activeTab === 3 ? "h-full" : "hidden"}>
+            <Dictionary />
+          </div>
+        )}
+        {visitedTabs.has(4) && (
+          <div className={activeTab === 4 ? "h-full" : "hidden"}>
             <History
               autoSummarizeSessionId={autoSummarizeSessionId}
               onAutoSummarizeComplete={handleAutoSummarizeComplete}
             />
           </div>
         )}
-        {visitedTabs.has(4) && (
-          <div className={activeTab === 4 ? "h-full" : "hidden"}>
+        {visitedTabs.has(5) && (
+          <div className={activeTab === 5 ? "h-full" : "hidden"}>
             <Settings />
           </div>
         )}

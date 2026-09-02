@@ -257,6 +257,24 @@ export interface TranscriptSession {
   folder?: string;
 }
 
+// --- Topic Tree ---
+
+export type TopicStatus = "open" | "decided" | "parked";
+
+export interface TopicNode {
+  id: string;
+  parent: string | null;
+  label: string;
+  status: TopicStatus;
+  start_sec: number;
+  end_sec: number;
+}
+
+export interface TopicTree {
+  nodes: TopicNode[];
+  active: string | null;
+}
+
 // --- Entry Edit ---
 
 export interface EntryEditRequest {
@@ -317,7 +335,12 @@ export interface WsUpdateMessage {
   data: Array<{ id: string; text: string; refined: boolean }>;
 }
 
-export type WsMessage = WsEntryMessage | WsStatusMessage | WsPongMessage | WsClearMessage | WsRefreshMessage | WsUpdateMessage;
+export interface WsTopicMessage {
+  type: "topic";
+  data: TopicTree;
+}
+
+export type WsMessage = WsEntryMessage | WsStatusMessage | WsPongMessage | WsClearMessage | WsRefreshMessage | WsUpdateMessage | WsTopicMessage;
 
 // --- Register Speaker from Entry ---
 

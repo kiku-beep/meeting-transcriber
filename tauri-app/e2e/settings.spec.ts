@@ -138,7 +138,7 @@ test.describe("会議設定機能", () => {
     await page.waitForSelector("text=設定", { timeout: 15000 });
   });
 
-  test("会議設定セクションに2つのトグルが表示される", async ({ page }) => {
+  test("会議設定セクションに3つのトグルが表示される", async ({ page }) => {
     // 設定タブをクリック
     await page.locator("button", { hasText: "設定" }).click();
     await page.waitForTimeout(1500);
@@ -147,13 +147,14 @@ test.describe("会議設定機能", () => {
     const heading = page.locator("h3", { hasText: "会議設定" });
     await expect(heading).toBeVisible();
 
-    // 2つのトグルボタン（screenshot_enabledはスクリーンキャプチャ設定セクションに集約）
+    // 3つのトグルボタン（screenshot_enabledはスクリーンキャプチャ設定セクションに集約）
     const section = page.locator("section", { has: heading });
-    await expect(section.locator("button.rounded-full")).toHaveCount(2);
+    await expect(section.locator("button.rounded-full")).toHaveCount(3);
 
     // ラベル確認
     await expect(section.locator("text=ポップアップ通知")).toBeVisible();
     await expect(section.locator("text=音声ファイル保存")).toBeVisible();
+    await expect(section.locator("text=論点ツリー")).toBeVisible();
   });
 
   test("録音開始ボタンがcircular structureエラーなく動作する", async ({ page }) => {

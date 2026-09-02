@@ -134,3 +134,38 @@ async def set_text_refine(req: SetTextRefineRequest):
     update_env_file("TEXT_REFINE_ENABLED", str(req.enabled).lower())
     return {"text_refine_enabled": settings.text_refine_enabled}
 
+
+@router.get("/topic-tree")
+async def get_topic_tree_config():
+    """Return meeting-time topic-tree settings."""
+    return {
+        "topic_tree_enabled": settings.topic_tree_enabled,
+        "topic_tree_interval_s": settings.topic_tree_interval_s,
+    }
+
+
+class SetTopicTreeConfigRequest(BaseModel):
+    topic_tree_enabled: bool | None = None
+    topic_tree_interval_s: float | None = None
+
+
+@router.put("/topic-tree")
+async def set_topic_tree_config(req: SetTopicTreeConfigRequest):
+    """Update meeting-time topic-tree settings.
+
+    TopicTracker は start() 時に設定を読むため、変更は次の録音開始から効く。
+    """
+    if req.topic_tree_enabled is not None:
+        settings.topic_tree_enabled = req.topic_tree_enabled
+        update_env_file("TOPIC_TREE_ENABLED", str(req.topic_tree_enabled).lower())
+    if req.topic_tree_interval_s is not None:
+        # 下限30秒: 1回の更新に20〜35秒かかる実測があり、これより短いと
+        # 常に前回の更新が走っていて busy になる。
+        if req.topic_tree_interval_s < 30 or req.topic_tree_interval_s > 600:
+            raise HTTPException(400, "更新間隔は30〜600秒で指定してください")
+        settings.topic_tree_interval_s = req.topic_tree_interval_s
+        update_env_file("TOPIC_TREE_INTERVAL_S", str(req.topic_tree_interval_s))
+    return {
+        "topic_tree_enabled": settings.topic_tree_enabled,
+        "topic_tree_interval_s": settings.topic_tree_interval_s,
+    }

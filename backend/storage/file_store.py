@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from backend.config import settings
+from backend.core.topic_tree import TopicTree, tree_from_dict, tree_to_dict
 from backend.models.schemas import TranscriptEntry
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,8 @@ def _atomic_write_json(path: Path, data) -> None:
 
 
 def save_session(session_id: str, entries: list[TranscriptEntry],
-                 metadata: dict | None = None) -> Path:
+                 metadata: dict | None = None,
+                 topic_tree: TopicTree | None = None) -> Path:
     """Save a completed session to disk.
 
     Creates:
@@ -48,6 +50,7 @@ def save_session(session_id: str, entries: list[TranscriptEntry],
         transcript.json  — structured entries
         transcript.txt   — plain text
         metadata.json    — session metadata
+        topics.json      — topic tree, when non-empty
     """
     _validate_session_id(session_id)
     session_dir = settings.sessions_dir / session_id
@@ -84,8 +87,12 @@ def save_session(session_id: str, entries: list[TranscriptEntry],
         "entry_count": len(entries),
         "saved_at": datetime.now().isoformat(),
         **(metadata or {}),
+        "topic_count": len(topic_tree.nodes) if topic_tree is not None else 0,
     }
     _atomic_write_json(session_dir / "metadata.json", meta)
+
+    if topic_tree is not None and topic_tree.nodes:
+        _atomic_write_json(session_dir / "topics.json", tree_to_dict(topic_tree))
 
     # screenshots.json (if screenshots exist)
     screenshots_dir = session_dir / "screenshots"
@@ -180,6 +187,25 @@ def load_summary(session_id: str) -> str | None:
     if not path.exists():
         return None
     return path.read_text(encoding="utf-8")
+
+
+def load_topics(session_id: str) -> dict:
+    """Load topics.json, returning an empty tree when absent or unreadable.
+
+    履歴画面から呼ばれるため、壊れたファイルで例外を投げない。ゼロ埋め等で
+    NUL化したJSONを掴んでも空ツリーに劣化させる。形が違う場合も
+    tree_from_dict が防御的に落とす。
+    """
+    _validate_session_id(session_id)
+    path = settings.sessions_dir / session_id / "topics.json"
+    if not path.exists():
+        return {"nodes": [], "active": None}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        logger.warning("topics.json is unreadable for %s", session_id, exc_info=True)
+        return {"nodes": [], "active": None}
+    return tree_to_dict(tree_from_dict(data))
 
 
 def save_summary(session_id: str, summary_md: str) -> Path:

@@ -60,6 +60,9 @@ class MockSession:
     session_name: str = ""
     started_at: str | None = None
     entries: list[dict[str, Any]] = field(default_factory=list)
+    topics: dict[str, Any] = field(
+        default_factory=lambda: {"nodes": [], "active": None}
+    )
     transcript_sockets: set[WebSocket] = field(default_factory=set)
 
 
@@ -164,6 +167,10 @@ def create_app() -> FastAPI:
             "audio_saving_enabled": False,
         }
 
+    @app.get("/api/config/topic-tree")
+    async def topic_tree_config() -> dict[str, Any]:
+        return {"topic_tree_enabled": False, "topic_tree_interval_s": 90.0}
+
     @app.get("/api/config/screenshots")
     async def screenshots_config() -> dict[str, Any]:
         return {
@@ -254,6 +261,21 @@ def create_app() -> FastAPI:
             "generated_at": datetime.now().isoformat(),
             "entry_count": len(selected),
             "usage": {"model": "mock", "billing": "claude-subscription"},
+        }
+
+    @app.get("/api/topics")
+    async def topics(client_id: str = Query("default")) -> dict[str, Any]:
+        return state.session(client_id).topics
+
+    @app.post("/api/topics/refresh")
+    async def refresh_topics(
+        body: dict[str, Any] = Body(default_factory=dict),
+    ) -> dict[str, Any]:
+        client_id = str(body.get("client_id") or "default")
+        return {
+            "updated": False,
+            "status": "no_new_entries",
+            "tree": state.session(client_id).topics,
         }
 
     @app.get("/api/call-detection/pending")

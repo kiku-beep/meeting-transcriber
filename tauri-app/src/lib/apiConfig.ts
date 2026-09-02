@@ -38,3 +38,21 @@ export async function setTextRefine(enabled: boolean): Promise<{ text_refine_ena
     body: JSON.stringify({ enabled }),
   });
 }
+
+export interface TopicTreeConfig {
+  topic_tree_enabled: boolean;
+  topic_tree_interval_s: number;
+}
+
+export async function getTopicTreeConfig(): Promise<TopicTreeConfig> {
+  return apiFetch("/api/config/topic-tree");
+}
+
+export async function setTopicTreeConfig(
+  config: Partial<TopicTreeConfig>,
+): Promise<TopicTreeConfig> {
+  return apiFetch("/api/config/topic-tree", {
+    method: "PUT",
+    body: JSON.stringify(config),
+  });
+}

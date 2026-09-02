@@ -206,6 +206,17 @@ class Settings(BaseSettings):
     text_refine_delay_s: float = 3.0
     text_refine_model: str = "gemini-2.5-flash"
 
+    # Topic tree (incremental meeting-time updates)
+    topic_tree_enabled: bool = False
+    topic_tree_interval_s: float = 90.0
+    topic_tree_min_new_entries: int = 5
+    topic_tree_max_nodes: int = 80
+    topic_tree_recent_window_sec: float = 900.0
+    topic_tree_engine: str = "codex-cli"
+    topic_tree_codex_profile: str = "gen"
+    # max は実測で3分29秒かかりリアルタイム更新に間に合わないため low を既定にする
+    topic_tree_codex_reasoning_effort: str = "low"
+
     # Audio saving (transcription continues regardless)
     audio_saving_enabled: bool = True
     audio_autosave_interval_s: float = 60.0

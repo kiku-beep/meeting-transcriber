@@ -50,6 +50,7 @@ from backend.api.routes_dictionary import router as dictionary_router
 from backend.api.routes_transcript import router as transcript_router
 from backend.api.routes_config import router as config_router
 from backend.api.routes_summary import router as summary_router
+from backend.api.routes_topics import router as topics_router
 from backend.api.routes_server import router as server_router
 from backend.api.routes_playback import router as playback_router
 from backend.api.routes_screenshot import router as screenshot_router
@@ -208,6 +209,7 @@ app.include_router(speaker_router)
 app.include_router(dictionary_router)
 app.include_router(transcript_router)
 app.include_router(summary_router)
+app.include_router(topics_router)
 app.include_router(server_router)
 app.include_router(config_router)
 app.include_router(playback_router)

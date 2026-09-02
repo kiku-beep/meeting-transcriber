@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { CONNECTION_CONFIG_CHANGED, getWsUrl, getClientId, getAuthToken } from "./api";
-import type { TranscriptEntry, SessionInfo, WsMessage } from "./types";
+import type { TopicTree, TranscriptEntry, SessionInfo, WsMessage } from "./types";
 
 interface UseWebSocketOptions {
   onEntry?: (entry: TranscriptEntry) => void;
@@ -8,10 +8,11 @@ interface UseWebSocketOptions {
   onClear?: () => void;
   onRefresh?: () => void;
   onUpdate?: (updates: Array<{ id: string; text: string; refined: boolean }>) => void;
+  onTopic?: (tree: TopicTree) => void;
   enabled?: boolean;
 }
 
-export function useWebSocket({ onEntry, onStatus, onClear, onRefresh, onUpdate, enabled = true }: UseWebSocketOptions) {
+export function useWebSocket({ onEntry, onStatus, onClear, onRefresh, onUpdate, onTopic, enabled = true }: UseWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
@@ -21,12 +22,14 @@ export function useWebSocket({ onEntry, onStatus, onClear, onRefresh, onUpdate, 
   const onClearRef = useRef(onClear);
   const onRefreshRef = useRef(onRefresh);
   const onUpdateRef = useRef(onUpdate);
+  const onTopicRef = useRef(onTopic);
 
   onEntryRef.current = onEntry;
   onStatusRef.current = onStatus;
   onClearRef.current = onClear;
   onRefreshRef.current = onRefresh;
   onUpdateRef.current = onUpdate;
+  onTopicRef.current = onTopic;
 
   useEffect(() => {
     const handleConfigChanged = () => setConnectionVersion((v) => v + 1);
@@ -77,6 +80,7 @@ export function useWebSocket({ onEntry, onStatus, onClear, onRefresh, onUpdate, 
           else if (msg.type === "clear") onClearRef.current?.();
           else if (msg.type === "refresh") onRefreshRef.current?.();
           else if (msg.type === "update") onUpdateRef.current?.(msg.data);
+          else if (msg.type === "topic") onTopicRef.current?.(msg.data);
         } catch {
           /* ignore parse errors */
         }

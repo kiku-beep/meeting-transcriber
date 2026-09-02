@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -130,6 +131,12 @@ _CODEX_API_ENV_VARS = (
     "CODEX_API_KEY",
     "AZURE_OPENAI_API_KEY",
 )
+
+_CODEX_REASONING_EFFORTS = frozenset(("low", "medium", "high", "xhigh", "max"))
+_CODEX_LOGIN_CACHE_TTL_S = 300.0
+_codex_login_verified_at: float | None = None
+_codex_login_verified_command: str | None = None
+_codex_login_verified_timeout_s: float | None = None
 
 TextProvider = tuple[str, Callable[[str], Awaitable[dict]]]
 
@@ -366,6 +373,16 @@ def reset_gemini_client() -> None:
     _client = None
 
 
+def reset_codex_login_cache() -> None:
+    """Reset the process-local Codex login-status cache."""
+    global _codex_login_verified_at
+    global _codex_login_verified_command
+    global _codex_login_verified_timeout_s
+    _codex_login_verified_at = None
+    _codex_login_verified_command = None
+    _codex_login_verified_timeout_s = None
+
+
 async def generate_summary(entries: list[dict]) -> dict:
     """Generate a meeting summary from transcript entries using the configured engine."""
     engine = settings.summary_engine
@@ -514,6 +531,18 @@ def _resolve_codex_subscription_command() -> str:
 
 
 async def _verify_codex_chatgpt_login(command: str, cwd: str) -> None:
+    global _codex_login_verified_at
+    global _codex_login_verified_command
+    global _codex_login_verified_timeout_s
+
+    if (
+        _codex_login_verified_at is not None
+        and _codex_login_verified_command == command
+        and _codex_login_verified_timeout_s == settings.codex_cli_timeout_s
+        and 0 <= time.monotonic() - _codex_login_verified_at < _CODEX_LOGIN_CACHE_TTL_S
+    ):
+        return
+
     process = await asyncio.create_subprocess_exec(
         command,
         "login",
@@ -542,8 +571,23 @@ async def _verify_codex_chatgpt_login(command: str, cwd: str) -> None:
             f" `codex login status` の結果: {status_text or '出力なし'}"
         )
 
+    _codex_login_verified_at = time.monotonic()
+    _codex_login_verified_command = command
+    _codex_login_verified_timeout_s = settings.codex_cli_timeout_s
 
-async def _generate_text_with_codex_cli(prompt: str) -> dict:
+
+async def _generate_text_with_codex_cli(
+    prompt: str,
+    *,
+    profile: str | None = None,
+    reasoning_effort: str | None = None,
+) -> dict:
+    if reasoning_effort is not None and reasoning_effort not in _CODEX_REASONING_EFFORTS:
+        raise ValueError(
+            "reasoning_effort must be one of: low, medium, high, xhigh, max"
+        )
+
+    selected_profile = settings.codex_cli_profile if profile is None else profile
     command = _resolve_codex_subscription_command()
     with tempfile.TemporaryDirectory(prefix="transcriber-codex-") as temp_dir:
         await _verify_codex_chatgpt_login(command, temp_dir)
@@ -552,7 +596,11 @@ async def _generate_text_with_codex_cli(prompt: str) -> dict:
             command,
             "exec",
             "-p",
-            settings.codex_cli_profile,
+            selected_profile,
+        ]
+        if reasoning_effort is not None:
+            cmd.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
+        cmd.extend([
             "--ephemeral",
             "--ignore-user-config",
             "--sandbox",
@@ -562,7 +610,7 @@ async def _generate_text_with_codex_cli(prompt: str) -> dict:
             "--output-last-message",
             str(output_path),
             "-",
-        ]
+        ])
         process = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=temp_dir,
@@ -578,26 +626,39 @@ async def _generate_text_with_codex_cli(prompt: str) -> dict:
         )
         diagnostic = stdout.decode("utf-8", errors="replace").strip()
         error = stderr.decode("utf-8", errors="replace").strip()
+        loop = asyncio.get_running_loop()
         if process.returncode != 0:
             raise RuntimeError(
                 f"Codex CLI呼び出しに失敗しました: "
                 f"{error or diagnostic or process.returncode}"
             )
-        if not output_path.exists():
+        if not await loop.run_in_executor(None, output_path.exists):
             raise RuntimeError(
                 f"Codex CLIから回答を取得できませんでした: "
                 f"{error or diagnostic or '最終応答ファイルがありません'}"
             )
-        content = output_path.read_text(encoding="utf-8").strip()
+        content = await loop.run_in_executor(
+            None,
+            lambda: output_path.read_text(encoding="utf-8"),
+        )
+        content = content.strip()
         if not content:
             raise RuntimeError(
                 f"Codex CLIから回答を取得できませんでした: "
                 f"{error or diagnostic or '出力が空でした'}"
             )
 
+    usage = {"model": "codex-cli", "billing": "codex-subscription"}
+    if profile is not None or reasoning_effort is not None:
+        usage.update(
+            {
+                "profile": selected_profile,
+                "reasoning_effort": reasoning_effort,
+            }
+        )
     return {
         "content": content,
-        "usage": {"model": "codex-cli", "billing": "codex-subscription"},
+        "usage": usage,
     }
 
 

@@ -45,6 +45,10 @@ export default defineConfig({
       testMatch: /live-ai\.spec\.ts/,
     },
     {
+      name: "topics",
+      testMatch: /topics\.spec\.ts/,
+    },
+    {
       name: "ui-colors",
       testMatch: /ui-colors\.spec\.ts/,
     },
