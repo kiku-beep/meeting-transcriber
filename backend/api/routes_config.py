@@ -162,10 +162,10 @@ async def set_topic_tree_config(req: SetTopicTreeConfigRequest):
         settings.topic_tree_enabled = req.topic_tree_enabled
         update_env_file("TOPIC_TREE_ENABLED", str(req.topic_tree_enabled).lower())
     if req.topic_tree_interval_s is not None:
-        # 下限30秒: 1回の更新に20〜35秒かかる実測があり、これより短いと
-        # 常に前回の更新が走っていて busy になる。
-        if req.topic_tree_interval_s < 30 or req.topic_tree_interval_s > 600:
-            raise HTTPException(400, "更新間隔は30〜600秒で指定してください")
+        # 下限20秒: 1回の更新に20〜35秒かかる実測があり、周期ループは直列
+        # （前回が終わるまで次を始めない）なので、20秒は「終わり次第すぐ次」になる。
+        if req.topic_tree_interval_s < 20 or req.topic_tree_interval_s > 600:
+            raise HTTPException(400, "更新間隔は20〜600秒で指定してください")
         settings.topic_tree_interval_s = req.topic_tree_interval_s
         update_env_file("TOPIC_TREE_INTERVAL_S", str(req.topic_tree_interval_s))
     if req.topic_tree_codex_reasoning_effort is not None:

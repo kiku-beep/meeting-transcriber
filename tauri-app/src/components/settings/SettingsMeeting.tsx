@@ -8,8 +8,8 @@ import {
   type TopicTreeReasoningEffort,
 } from "../../lib/apiConfig";
 
-// 1回の更新に実測20〜35秒かかるため、下限は30秒（サーバ側でも弾く）。
-const INTERVAL_OPTIONS = [60, 90, 120, 180, 300];
+// 1回の更新に実測20〜35秒かかる。20秒は「前回が終わり次第すぐ次」の意味になる（ループは直列で多重実行しない）。下限はサーバ側でも弾く。
+const INTERVAL_OPTIONS = [20, 30, 60, 90, 120, 180, 300];
 
 interface ToggleItem {
   key: "call_notification_enabled" | "audio_saving_enabled";
