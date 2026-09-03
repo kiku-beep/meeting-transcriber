@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from fastapi import Body, FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -59,6 +60,7 @@ class MockSession:
     session_id: str = ""
     session_name: str = ""
     started_at: str | None = None
+    saved_at: str | None = None
     entries: list[dict[str, Any]] = field(default_factory=list)
     topics: dict[str, Any] = field(
         default_factory=lambda: {"nodes": [], "active": None}
@@ -74,6 +76,30 @@ class MockState:
         if client_id not in self.sessions:
             self.sessions[client_id] = MockSession(client_id=client_id)
         return self.sessions[client_id]
+
+    def session_by_id(self, session_id: str) -> MockSession:
+        for session in self.sessions.values():
+            if session.session_id == session_id:
+                return session
+        raise HTTPException(status_code=404, detail="session not found")
+
+    def transcript_sessions(self) -> list[dict[str, Any]]:
+        sessions = [session for session in self.sessions.values() if session.session_id]
+        sessions.sort(key=lambda session: session.started_at or "", reverse=True)
+        return [
+            {
+                "session_id": session.session_id,
+                "session_name": session.session_name,
+                "started_at": session.started_at,
+                "saved_at": session.saved_at,
+                "entry_count": len(session.entries),
+                "screenshot_count": 0,
+                "total_size_bytes": 0,
+                "is_favorite": False,
+                "folder": "",
+            }
+            for session in sessions
+        ]
 
     async def broadcast(self, session: MockSession, message: dict[str, Any]) -> None:
         stale: list[WebSocket] = []
@@ -105,6 +131,7 @@ class MockState:
 
     async def stop(self, session: MockSession) -> dict[str, Any]:
         session.status = "idle"
+        session.saved_at = datetime.now().isoformat()
         await self.broadcast(session, {"type": "status", "data": _session_info(session)})
         return _session_info(session)
 
@@ -285,6 +312,77 @@ def create_app() -> FastAPI:
     @app.get("/api/call-detection/pending")
     async def pending_calls() -> dict[str, Any]:
         return {"calls": []}
+
+    @app.get("/api/transcripts/folders")
+    async def transcript_folders() -> dict[str, Any]:
+        return {"folders": []}
+
+    @app.get("/api/transcripts")
+    async def transcripts() -> dict[str, Any]:
+        return {"sessions": state.transcript_sessions()}
+
+    @app.get("/api/transcripts/{session_id}")
+    async def transcript(session_id: str) -> dict[str, Any]:
+        session = state.session_by_id(session_id)
+        return {"session_id": session.session_id, "entries": session.entries}
+
+    @app.get("/api/transcripts/{session_id}/export")
+    async def transcript_export(
+        session_id: str, format: str = Query("txt")
+    ) -> Any:
+        session = state.session_by_id(session_id)
+        if format == "json":
+            return {"session_id": session.session_id, "entries": session.entries}
+        lines = [entry["text"] for entry in session.entries]
+        if format == "md":
+            text = "\n".join(f"- {line}" for line in lines)
+        else:
+            text = "\n".join(lines)
+        return PlainTextResponse(text)
+
+    @app.get("/api/summary/{session_id}")
+    async def summary(session_id: str) -> dict[str, Any]:
+        state.session_by_id(session_id)
+        return {"session_id": session_id, "summary": ""}
+
+    @app.post("/api/summary/generate")
+    async def generate_summary(
+        body: dict[str, Any] = Body(default_factory=dict),
+    ) -> dict[str, Any]:
+        session_id = str(body.get("session_id") or "")
+        session = state.session_by_id(session_id)
+        summary = f"Mock summary for {session.session_name or session.session_id}"
+        return {
+            "session_id": session.session_id,
+            "summary": summary,
+            "model": "mock",
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": 0,
+            },
+        }
+
+    @app.get("/api/playback/{session_id}/audio/info")
+    async def audio_info(session_id: str) -> dict[str, Any]:
+        state.session_by_id(session_id)
+        return {
+            "has_audio": False,
+            "format": None,
+            "duration_seconds": None,
+            "file_size_bytes": None,
+        }
+
+    @app.post("/api/playback/{session_id}/compress")
+    async def compress_audio(session_id: str) -> dict[str, Any]:
+        state.session_by_id(session_id)
+        return {"status": "no_audio", "session_id": session_id}
+
+    @app.get("/api/screenshots/{session_id}")
+    async def screenshots(session_id: str) -> dict[str, Any]:
+        state.session_by_id(session_id)
+        return {"session_id": session_id, "screenshots": []}
 
     @app.get("/api/session/status")
     async def session_status(client_id: str = Query("default")) -> dict[str, Any]:

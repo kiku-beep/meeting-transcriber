@@ -4,7 +4,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { getBaseUrl, getClientId, getAuthToken } from "./api";
+import { getBaseUrl, getClientId, getAuthToken, isTauriRuntime } from "./api";
 
 export interface AudioSidecarStartOptions {
   sessionName?: string;
@@ -16,6 +16,10 @@ export interface AudioSidecarStartOptions {
 export async function startAudioSidecar(
   options: AudioSidecarStartOptions = {},
 ): Promise<string> {
+  if (!isTauriRuntime()) {
+    throw new Error("リモート録音はMacアプリでのみ利用できます。Tauriアプリから起動してください。");
+  }
+
   return invoke<string>("start_audio_sidecar", {
     serverUrl: getBaseUrl(),
     clientId: getClientId(),
@@ -28,11 +32,19 @@ export async function startAudioSidecar(
 
 /** Stop the audio capture sidecar. */
 export async function stopAudioSidecar(): Promise<string> {
+  if (!isTauriRuntime()) {
+    return "audio sidecar is unavailable outside Tauri";
+  }
+
   return invoke<string>("stop_audio_sidecar");
 }
 
 /** Check if the audio sidecar is running. */
 export async function isAudioSidecarRunning(): Promise<boolean> {
+  if (!isTauriRuntime()) {
+    return false;
+  }
+
   return invoke<boolean>("get_audio_sidecar_status");
 }
 
