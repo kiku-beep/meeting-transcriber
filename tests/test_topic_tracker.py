@@ -91,6 +91,33 @@ def test_one_period_applies_fake_patch_and_enqueues_tree():
     asyncio.run(scenario())
 
 
+def test_one_period_applies_argument_links_and_exposes_them_in_snapshot():
+    from backend.core.topic_tracker import TopicTracker
+
+    async def scenario():
+        async def fake_generate(prompt: str) -> dict:
+            return {
+                "content": (
+                    '{"add":['
+                    '{"id":"question","label":"問い","kind":"question"},'
+                    '{"id":"claim","label":"案","kind":"claim"}],'
+                    '"add_links":[{"source":"claim","target":"question","type":"objects"}]}'
+                ),
+                "usage": {},
+            }
+
+        tracker = TopicTracker(_settings(), fake_generate)
+        tracker.start([_entry(0, "案を検討する")])
+        payload = await asyncio.wait_for(tracker.topic_queue.get(), timeout=1)
+
+        assert payload["links"] == [
+            {"source": "claim", "target": "question", "type": "objects"}
+        ]
+        await tracker.stop()
+
+    asyncio.run(scenario())
+
+
 def test_insufficient_new_entries_skips_llm():
     from backend.core.topic_tracker import TopicTracker
 

@@ -199,12 +199,12 @@ def load_topics(session_id: str) -> dict:
     _validate_session_id(session_id)
     path = settings.sessions_dir / session_id / "topics.json"
     if not path.exists():
-        return {"nodes": [], "active": None}
+        return {"nodes": [], "links": [], "active": None}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         logger.warning("topics.json is unreadable for %s", session_id, exc_info=True)
-        return {"nodes": [], "active": None}
+        return {"nodes": [], "links": [], "active": None}
     return tree_to_dict(tree_from_dict(data))
 
 

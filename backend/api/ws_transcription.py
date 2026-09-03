@@ -10,7 +10,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from starlette.websockets import WebSocketState
 
-from backend.core.topic_tree import tree_to_dict
+from backend.core.topic_tree import VALID_LINK_TYPES, tree_to_dict
 from backend.models.session import (
     get_session,
     get_or_create_session,
@@ -63,7 +63,25 @@ def _sanitize_topic_tree(tree_or_payload) -> dict:
                 value = 0.0
             node[key] = value if math.isfinite(value) else 0.0
         nodes.append(node)
-    sanitized = {"nodes": nodes, "active": payload.get("active")}
+    node_ids = {node.get("id") for node in nodes if isinstance(node.get("id"), str)}
+    raw_links = payload.get("links", [])
+    links = []
+    if isinstance(raw_links, list):
+        for raw_link in raw_links:
+            if not isinstance(raw_link, dict):
+                continue
+            source = raw_link.get("source")
+            target = raw_link.get("target")
+            if (
+                isinstance(source, str)
+                and isinstance(target, str)
+                and source != target
+                and source in node_ids
+                and target in node_ids
+                and raw_link.get("type") in VALID_LINK_TYPES
+            ):
+                links.append(dict(raw_link))
+    sanitized = {"nodes": nodes, "links": links, "active": payload.get("active")}
     # 周期更新の失敗を画面へ届ける。これが無いと「論点を抽出中…」のまま
     # 会議が終わる（実機で6分間気づけなかった）。
     if "error" in payload:

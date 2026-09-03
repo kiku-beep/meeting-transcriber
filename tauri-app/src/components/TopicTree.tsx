@@ -5,7 +5,7 @@ import { useWebSocket } from "../lib/useWebSocket";
 import type { SessionInfo, TopicTree as TopicTreeData } from "../lib/types";
 import TopicTreeView from "./topics/TopicTreeView";
 
-const EMPTY_TREE: TopicTreeData = { nodes: [], active: null };
+const EMPTY_TREE: TopicTreeData = { nodes: [], links: [], active: null };
 
 // 「更新なし」をひとまとめにすると、機能OFFやLLM失敗を取り違える。
 // 失敗はサーバが500で返すので error 側に出る。
@@ -104,7 +104,7 @@ export default function TopicTree() {
       <div className="page-heading">
         <div>
           <p className="workspace-eyebrow">MEETING MAP</p>
-          <h2>論点ツリー</h2>
+          <h2>議論マップ</h2>
         </div>
         <div className="topic-tree-page__actions">
           {sessionStatus && (

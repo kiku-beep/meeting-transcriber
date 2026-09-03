@@ -27,7 +27,7 @@ def _get_client_session(client_id: str):
 
 
 def _empty_tree() -> dict:
-    return {"nodes": [], "active": None}
+    return {"nodes": [], "links": [], "active": None}
 
 
 @router.get("")

@@ -107,6 +107,138 @@ def test_parse_patch_discards_invalid_add_items_only():
     assert [node.id for node in parsed.add] == ["n3"]
 
 
+def test_parse_patch_keeps_only_links_with_valid_endpoints_and_types():
+    from backend.core.topic_tree import parse_patch
+
+    parsed = parse_patch(
+        json.dumps(
+            {
+                "add": [],
+                "add_links": [
+                    {"source": "n1", "target": "n2", "type": "supports"},
+                    {"source": "n2", "target": "n3", "type": "objects"},
+                    {"source": "n3", "target": "n4", "type": "invalid"},
+                    {"source": "n4", "target": "n5"},
+                    {"source": "", "target": "n6", "type": "depends"},
+                    {"source": "n7", "target": "   ", "type": "constrains"},
+                    "not a link",
+                ],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert [link.model_dump() for link in parsed.add_links] == [
+        {"source": "n1", "target": "n2", "type": "supports"},
+        {"source": "n2", "target": "n3", "type": "objects"},
+    ]
+
+
+def test_build_patch_prompt_describes_kinds_and_argument_links():
+    from backend.core.topic_tree import TopicTree, build_patch_prompt
+
+    prompt = build_patch_prompt(TopicTree(), [])
+
+    assert '"kind":"question|claim|constraint|decision"' in prompt
+    assert '"add_links"' in prompt
+    assert '"source"' in prompt
+    assert '"target"' in prompt
+    assert "反論・制約は必ず別ノード" in prompt
+
+
+def test_apply_patch_filters_deduplicated_and_dangling_links():
+    from backend.core.topic_tree import TopicLink, TopicNode, TopicPatch, TopicTree, apply_patch
+
+    tree = TopicTree(
+        nodes=[TopicNode(id="root", label="根")],
+        links=[TopicLink(source="root", target="child", type="supports")],
+    )
+    patch = TopicPatch(
+        add=[
+            TopicNode(id="child", parent="root", label="子"),
+            TopicNode(id="orphan", parent="missing", label="孤児"),
+        ],
+        add_links=[
+            TopicLink(source="root", target="child", type="supports"),
+            TopicLink(source="child", target="child", type="objects"),
+            TopicLink(source="child", target="orphan", type="depends"),
+            TopicLink(source="child", target="missing", type="objects"),
+            TopicLink(source="child", target="root", type="objects"),
+        ],
+    )
+
+    result = apply_patch(tree, patch)
+
+    assert [link.model_dump() for link in result.links] == [
+        {"source": "root", "target": "child", "type": "supports"},
+        {"source": "child", "target": "root", "type": "objects"},
+    ]
+
+
+def test_reserve_ids_remaps_link_endpoints_without_mutating_patch():
+    from backend.core.topic_tree import TopicLink, TopicNode, TopicPatch, TopicTree, reserve_ids
+
+    tree = TopicTree(nodes=[TopicNode(id="t1", label="既存")])
+    patch = TopicPatch(
+        add=[
+            TopicNode(id="t1", label="新しい親"),
+            TopicNode(id="child", parent="t1", label="子"),
+        ],
+        add_links=[TopicLink(source="t1", target="child", type="supports")],
+    )
+
+    reserved = reserve_ids(tree, patch)
+
+    assert reserved.add_links[0].model_dump() == {
+        "source": "t2",
+        "target": "child",
+        "type": "supports",
+    }
+    assert patch.add_links[0].source == "t1"
+
+
+def test_select_tree_for_prompt_keeps_only_links_inside_selected_nodes():
+    from backend.core.topic_tree import TopicLink, TopicNode, TopicTree, select_tree_for_prompt
+
+    tree = TopicTree(
+        nodes=[
+            TopicNode(id="root", label="根", end_sec=100),
+            TopicNode(id="recent", parent="root", label="最近", end_sec=99),
+            TopicNode(id="old", parent="root", label="古い", end_sec=1),
+        ],
+        links=[
+            TopicLink(source="root", target="recent", type="supports"),
+            TopicLink(source="recent", target="old", type="objects"),
+        ],
+    )
+
+    selected = select_tree_for_prompt(
+        tree,
+        max_nodes=2,
+        recent_window_sec=10,
+        now_sec=100,
+    )
+
+    assert [link.model_dump() for link in selected.links] == [
+        {"source": "root", "target": "recent", "type": "supports"},
+    ]
+
+
+def test_tree_from_dict_accepts_legacy_nodes_without_kind_or_links():
+    from backend.core.topic_tree import tree_from_dict, tree_to_dict
+
+    tree = tree_from_dict(
+        {
+            "nodes": [_node("legacy", label="旧形式")],
+            "active": "legacy",
+        }
+    )
+
+    assert tree.nodes[0].kind == "question"
+    assert tree.links == []
+    assert tree_to_dict(tree)["links"] == []
+
+
 def test_apply_patch_adds_nodes_while_preserving_parent_relationships():
     from backend.core.topic_tree import TopicNode, TopicPatch, TopicTree, apply_patch
 
@@ -293,7 +425,7 @@ def test_tree_from_dict_returns_empty_tree_for_invalid_inputs():
 
     for data in (None, [], {}, {"nodes": "not a list"}):
         tree = tree_from_dict(data)
-        assert tree_to_dict(tree) == {"nodes": [], "active": None}
+        assert tree_to_dict(tree) == {"nodes": [], "links": [], "active": None}
 
 
 def test_tree_to_dict_and_tree_from_dict_round_trip():

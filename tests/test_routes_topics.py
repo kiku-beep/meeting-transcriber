@@ -61,11 +61,13 @@ def test_get_topics_returns_current_tree(monkeypatch):
                 "id": "topic-1",
                 "parent": None,
                 "label": "価格",
+                "kind": "question",
                 "status": "open",
                 "start_sec": 1.0,
                 "end_sec": 2.0,
             }
         ],
+        "links": [],
         "active": "topic-1",
         "error": None,
     }
@@ -93,7 +95,7 @@ def test_get_topics_returns_empty_tree_when_session_is_not_running(monkeypatch):
     response = _client().get("/api/topics")
 
     assert response.status_code == 200
-    assert response.json() == {"nodes": [], "active": None}
+    assert response.json() == {"nodes": [], "links": [], "active": None}
 
 
 def test_refresh_topics_calls_tracker(monkeypatch):
@@ -159,11 +161,13 @@ def test_refresh_topics_returns_200_when_tracker_has_nothing_to_update(monkeypat
                 "id": "topic-1",
                 "parent": None,
                 "label": "価格",
+                "kind": "question",
                 "status": "open",
                 "start_sec": 1.0,
                 "end_sec": 2.0,
             }
         ],
+        "links": [],
         "active": "topic-1",
     }}
 
@@ -225,6 +229,21 @@ def test_ws_topic_payload_replaces_nonfinite_timestamps():
 
     assert payload["nodes"][0]["start_sec"] == 0.0
     assert payload["nodes"][0]["end_sec"] == 0.0
+
+
+def test_ws_topic_payload_preserves_argument_links():
+    from backend.api.ws_transcription import _sanitize_topic_tree
+
+    payload = _sanitize_topic_tree({
+        "nodes": [
+            {"id": "question", "parent": None, "label": "問い", "start_sec": 0, "end_sec": 1},
+            {"id": "claim", "parent": None, "label": "案", "start_sec": 1, "end_sec": 2},
+        ],
+        "links": [{"source": "claim", "target": "question", "type": "objects"}],
+        "active": "claim",
+    })
+
+    assert payload["links"] == [{"source": "claim", "target": "question", "type": "objects"}]
 
 
 def test_get_saved_topics_returns_stored_tree(monkeypatch):

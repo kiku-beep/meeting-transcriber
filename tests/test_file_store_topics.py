@@ -50,6 +50,22 @@ def test_save_session_round_trips_topics_and_metadata_count(monkeypatch, tmp_pat
     assert metadata["topic_count"] == 1
 
 
+def test_save_session_round_trips_argument_links(monkeypatch, tmp_path):
+    from backend.core.topic_tree import TopicLink, TopicNode, TopicTree, tree_to_dict
+    from backend.storage import file_store
+
+    monkeypatch.setenv("SESSIONS_DIR", str(tmp_path / "sessions"))
+    tree = TopicTree(
+        nodes=[TopicNode(id="question", label="問い"), TopicNode(id="claim", label="案", kind="claim")],
+        links=[TopicLink(source="claim", target="question", type="objects")],
+        active="claim",
+    )
+
+    file_store.save_session("linked-topic-session", [_entry()], {}, tree)
+
+    assert file_store.load_topics("linked-topic-session") == tree_to_dict(tree)
+
+
 def test_save_session_does_not_create_topics_file_for_empty_tree(monkeypatch, tmp_path):
     from backend.storage import file_store
     from backend.core.topic_tree import TopicTree
@@ -75,7 +91,35 @@ def test_load_topics_returns_empty_tree_for_missing_session(monkeypatch, tmp_pat
 
     assert file_store.load_topics("missing-topic-session") == {
         "nodes": [],
+        "links": [],
         "active": None,
+    }
+
+
+def test_load_topics_upgrades_legacy_json_without_kind_or_links(monkeypatch, tmp_path):
+    from backend.storage import file_store
+
+    monkeypatch.setenv("SESSIONS_DIR", str(tmp_path / "sessions"))
+    session_dir = file_store.settings.sessions_dir / "legacy-topic-session"
+    session_dir.mkdir(parents=True)
+    (session_dir / "topics.json").write_text(
+        '{"nodes":[{"id":"legacy","parent":null,"label":"旧論点",'
+        '"status":"open","start_sec":0,"end_sec":1}],"active":"legacy"}',
+        encoding="utf-8",
+    )
+
+    assert file_store.load_topics("legacy-topic-session") == {
+        "nodes": [{
+            "id": "legacy",
+            "parent": None,
+            "label": "旧論点",
+            "kind": "question",
+            "status": "open",
+            "start_sec": 0.0,
+            "end_sec": 1.0,
+        }],
+        "links": [],
+        "active": "legacy",
     }
 
 
@@ -102,12 +146,12 @@ def test_load_topics_degrades_to_empty_tree_for_unreadable_file(monkeypatch, tmp
 
     # 途中で切れたJSON
     (session_dir / "topics.json").write_text('{"nodes": [truncated', encoding="utf-8")
-    assert file_store.load_topics("2026-01-01_000000") == {"nodes": [], "active": None}
+    assert file_store.load_topics("2026-01-01_000000") == {"nodes": [], "links": [], "active": None}
 
     # ゼロ埋め（全NUL）
     (session_dir / "topics.json").write_bytes(b"\x00" * 64)
-    assert file_store.load_topics("2026-01-01_000000") == {"nodes": [], "active": None}
+    assert file_store.load_topics("2026-01-01_000000") == {"nodes": [], "links": [], "active": None}
 
     # JSONとしては妥当だが形が違う
     (session_dir / "topics.json").write_text('["not", "a", "tree"]', encoding="utf-8")
-    assert file_store.load_topics("2026-01-01_000000") == {"nodes": [], "active": None}
+    assert file_store.load_topics("2026-01-01_000000") == {"nodes": [], "links": [], "active": None}

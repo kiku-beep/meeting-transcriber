@@ -260,11 +260,20 @@ export interface TranscriptSession {
 // --- Topic Tree ---
 
 export type TopicStatus = "open" | "decided" | "parked";
+export type TopicKind = "question" | "claim" | "constraint" | "decision";
+export type TopicLinkType = "supports" | "objects" | "constrains" | "depends";
+
+export interface TopicLink {
+  source: string;
+  target: string;
+  type: TopicLinkType;
+}
 
 export interface TopicNode {
   id: string;
   parent: string | null;
   label: string;
+  kind: TopicKind;
   status: TopicStatus;
   start_sec: number;
   end_sec: number;
@@ -272,6 +281,7 @@ export interface TopicNode {
 
 export interface TopicTree {
   nodes: TopicNode[];
+  links: TopicLink[];
   active: string | null;
   /** 直近の周期更新が失敗していればその内容。成功すると null に戻る。 */
   error?: string | null;

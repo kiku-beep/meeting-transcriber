@@ -11,6 +11,8 @@ from pydantic import BaseModel
 
 MAX_LABEL_LEN = 15
 VALID_STATUSES = ("open", "decided", "parked")
+VALID_KINDS = ("question", "claim", "constraint", "decision")
+VALID_LINK_TYPES = ("supports", "objects", "constrains", "depends")
 # 実機（PIVOT 動画 2:00-8:56）で LLM が話の順に前の論点の子へ次々つなげ、
 # 深さ5の一本鎖になった。プロンプトで抑えつつ、超えた分はここで親を繰り上げる。
 MAX_DEPTH = 3
@@ -22,15 +24,25 @@ class TopicNode(BaseModel):
     id: str
     parent: str | None = None
     label: str
+    kind: str = "question"
     status: str = "open"
     start_sec: float = 0.0
     end_sec: float = 0.0
+
+
+class TopicLink(BaseModel):
+    """A typed relation between two topic nodes."""
+
+    source: str
+    target: str
+    type: str = "objects"
 
 
 class TopicTree(BaseModel):
     """The ordered topic tree and its active node."""
 
     nodes: list[TopicNode] = []
+    links: list[TopicLink] = []
     active: str | None = None
 
 
@@ -38,6 +50,7 @@ class TopicPatch(BaseModel):
     """A proposed incremental change to a topic tree."""
 
     add: list[TopicNode] = []
+    add_links: list[TopicLink] = []
     update: list[dict] = []
     active: str | None = None
 
@@ -62,7 +75,10 @@ def build_patch_prompt(tree: TopicTree, entries: list[dict]) -> str:
     # 孤児として全部捨てられてツリーが永久に空になる（実測で確認済み）。
     schema = (
         '{"add":[{"id":"t1","parent":null,"label":"論点(15字以内)",'
+        '"kind":"question|claim|constraint|decision",'
         '"status":"open|decided|parked","start_sec":0,"end_sec":0}], '
+        '"add_links":[{"source":"t1","target":"t2",'
+        '"type":"supports|objects|constrains|depends"}], '
         '"update":[{"id":"t1","status":"open|decided|parked","end_sec":0}], '
         '"active":"現在話している論点のid"}'
     )
@@ -88,6 +104,11 @@ def build_patch_prompt(tree: TopicTree, entries: list[dict]) -> str:
 既存論点の続きなら add せず update してください。
 label は {MAX_LABEL_LEN} 字以内にしてください。
 status は open / decided / parked のいずれかにしてください。
+「〜すべきか」という問いは kind を question、案・立場は claim、動かせない条件・コスト・仕様・人員の話は constraint、合意・保留は decision にしてください。
+反論・制約は必ず別ノードにして add_links で繋いでください。claim の label に「〜だが難しい」と押し込まないでください。
+add_links の source / target は既存idか同じパッチ内の新規idだけにしてください。
+リンクの type は supports / objects / constrains / depends のいずれかにしてください。
+リンクが1本も無い更新では add_links を [] にしてください。
 文字起こしにない内容を補わないでください。"""
 
 
@@ -159,6 +180,28 @@ def _parse_add_node(data: dict[str, Any]) -> TopicNode | None:
         return None
 
 
+def _parse_link(data: Any) -> TopicLink | None:
+    if not isinstance(data, dict):
+        return None
+
+    source = data.get("source")
+    target = data.get("target")
+    link_type = data.get("type")
+    if (
+        not isinstance(source, str)
+        or not source.strip()
+        or not isinstance(target, str)
+        or not target.strip()
+        or link_type not in VALID_LINK_TYPES
+    ):
+        return None
+
+    try:
+        return TopicLink(source=source, target=target, type=link_type)
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_patch(raw: str) -> TopicPatch:
     """Parse a tolerant LLM response into a topic-tree patch."""
 
@@ -183,6 +226,14 @@ def parse_patch(raw: str) -> TopicPatch:
             if node is not None:
                 add.append(node)
 
+    raw_add_links = data.get("add_links")
+    add_links: list[TopicLink] = []
+    if isinstance(raw_add_links, list):
+        for item in raw_add_links:
+            link = _parse_link(item)
+            if link is not None:
+                add_links.append(link)
+
     raw_update = data.get("update")
     update = (
         [item for item in raw_update if isinstance(item, dict)]
@@ -190,7 +241,7 @@ def parse_patch(raw: str) -> TopicPatch:
         else []
     )
     active = data.get("active") if isinstance(data.get("active"), str) else None
-    return TopicPatch(add=add, update=update, active=active)
+    return TopicPatch(add=add, add_links=add_links, update=update, active=active)
 
 
 def _as_float(value: Any) -> float:
@@ -221,6 +272,7 @@ def _normalize_node(node: TopicNode) -> TopicNode | None:
         id=node.id,
         parent=parent,
         label=node.label[:MAX_LABEL_LEN],
+        kind=node.kind if node.kind in VALID_KINDS else "question",
         status=node.status if node.status in VALID_STATUSES else "open",
         start_sec=start_sec,
         end_sec=end_sec,
@@ -309,8 +361,43 @@ def apply_patch(tree: TopicTree, patch: TopicPatch) -> TopicTree:
             if new_end > _as_float(node.end_sec):
                 node.end_sec = new_end
 
+    final_node_ids = set(nodes_by_id)
+    existing_links: list[TopicLink] = []
+    accepted_links: list[TopicLink] = []
+    seen_links: set[tuple[str, str, str]] = set()
+
+    def accept_link(raw_link: Any, destination: list[TopicLink]) -> None:
+        if not isinstance(raw_link, TopicLink):
+            return
+        link = raw_link.model_copy(deep=True)
+        if (
+            not isinstance(link.source, str)
+            or not isinstance(link.target, str)
+            or not link.source
+            or not link.target
+            or link.source == link.target
+            or link.source not in final_node_ids
+            or link.target not in final_node_ids
+            or link.type not in VALID_LINK_TYPES
+        ):
+            return
+        key = (link.source, link.target, link.type)
+        if key in seen_links:
+            return
+        seen_links.add(key)
+        destination.append(link)
+
+    for link in tree.links:
+        accept_link(link, existing_links)
+    for link in patch.add_links:
+        accept_link(link, accepted_links)
+
     active = patch.active if patch.active in nodes_by_id else None
-    return TopicTree(nodes=nodes, active=active)
+    return TopicTree(
+        nodes=nodes,
+        links=existing_links + accepted_links,
+        active=active,
+    )
 
 
 def reserve_ids(tree: TopicTree, patch: TopicPatch) -> TopicPatch:
@@ -348,8 +435,19 @@ def reserve_ids(tree: TopicTree, patch: TopicPatch) -> TopicPatch:
         )
 
     active = remapped_ids.get(patch.active, patch.active)
+    add_links = [
+        link.model_copy(
+            deep=True,
+            update={
+                "source": remapped_ids.get(link.source, link.source),
+                "target": remapped_ids.get(link.target, link.target),
+            },
+        )
+        for link in patch.add_links
+    ]
     return TopicPatch(
         add=add,
+        add_links=add_links,
         update=[deepcopy(change) for change in patch.update],
         active=active,
     )
@@ -366,7 +464,15 @@ def select_tree_for_prompt(
 
     copied_nodes = [node.model_copy(deep=True) for node in tree.nodes]
     if len(copied_nodes) <= max_nodes:
-        return TopicTree(nodes=copied_nodes, active=tree.active)
+        selected_ids = {node.id for node in copied_nodes}
+        links = [
+            link.model_copy(deep=True)
+            for link in tree.links
+            if link.source in selected_ids
+            and link.target in selected_ids
+            and link.type in VALID_LINK_TYPES
+        ]
+        return TopicTree(nodes=copied_nodes, links=links, active=tree.active)
 
     nodes_by_id = {node.id: node for node in copied_nodes}
     top_level_ids = {node.id for node in copied_nodes if node.parent is None}
@@ -415,7 +521,14 @@ def select_tree_for_prompt(
 
     selected_nodes = [node for node in copied_nodes if node.id in selected_ids]
     active = tree.active if tree.active in selected_ids else None
-    return TopicTree(nodes=selected_nodes, active=active)
+    links = [
+        link.model_copy(deep=True)
+        for link in tree.links
+        if link.source in selected_ids
+        and link.target in selected_ids
+        and link.type in VALID_LINK_TYPES
+    ]
+    return TopicTree(nodes=selected_nodes, links=links, active=active)
 
 
 def tree_to_dict(tree: TopicTree) -> dict:
@@ -423,6 +536,7 @@ def tree_to_dict(tree: TopicTree) -> dict:
 
     return {
         "nodes": [node.model_dump() for node in tree.nodes],
+        "links": [link.model_dump() for link in tree.links],
         "active": tree.active,
     }
 
@@ -430,7 +544,7 @@ def tree_to_dict(tree: TopicTree) -> dict:
 def tree_from_dict(data: dict) -> TopicTree:
     """Load a topic tree defensively from a JSON-compatible payload."""
 
-    if not isinstance(data, dict) or "nodes" not in data or "active" not in data:
+    if not isinstance(data, dict) or "nodes" not in data:
         return TopicTree()
     if not isinstance(data["nodes"], list):
         return TopicTree()
@@ -447,5 +561,13 @@ def tree_from_dict(data: dict) -> TopicTree:
         except (TypeError, ValueError):
             continue
 
-    active = data["active"] if isinstance(data["active"], str) else None
-    return TopicTree(nodes=nodes, active=active)
+    links: list[TopicLink] = []
+    raw_links = data.get("links")
+    if isinstance(raw_links, list):
+        for item in raw_links:
+            link = _parse_link(item)
+            if link is not None:
+                links.append(link)
+
+    active = data.get("active") if isinstance(data.get("active"), str) else None
+    return TopicTree(nodes=nodes, links=links, active=active)
