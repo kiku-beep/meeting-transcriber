@@ -5,6 +5,7 @@ import {
   setMeetingConfig,
   setTopicTreeConfig,
   type TopicTreeConfig,
+  type TopicTreeReasoningEffort,
 } from "../../lib/apiConfig";
 
 // 1回の更新に実測20〜35秒かかるため、下限は30秒（サーバ側でも弾く）。
@@ -38,6 +39,7 @@ export default function SettingsMeeting() {
   const [topicConfig, setTopicConfig] = useState<TopicTreeConfig>({
     topic_tree_enabled: false,
     topic_tree_interval_s: 90,
+    topic_tree_codex_reasoning_effort: "low",
   });
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -131,25 +133,52 @@ export default function SettingsMeeting() {
       </div>
 
       {topicConfig.topic_tree_enabled && (
-        <div className="flex items-center gap-3 pl-12">
-          <label className="text-xs text-slate-500" htmlFor="topic-tree-interval">
-            更新間隔
-          </label>
-          <select
-            id="topic-tree-interval"
-            value={topicConfig.topic_tree_interval_s}
-            disabled={saving}
-            onChange={(event) =>
-              handleTopicChange({ topic_tree_interval_s: Number(event.target.value) })
-            }
-            className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300"
-          >
-            {INTERVAL_OPTIONS.map((seconds) => (
-              <option key={seconds} value={seconds}>
-                {seconds}秒
-              </option>
-            ))}
-          </select>
+        <div className="space-y-2 pl-12">
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-slate-500" htmlFor="topic-tree-interval">
+              更新間隔
+            </label>
+            <select
+              id="topic-tree-interval"
+              value={topicConfig.topic_tree_interval_s}
+              disabled={saving}
+              onChange={(event) =>
+                handleTopicChange({ topic_tree_interval_s: Number(event.target.value) })
+              }
+              className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300"
+            >
+              {INTERVAL_OPTIONS.map((seconds) => (
+                <option key={seconds} value={seconds}>
+                  {seconds}秒
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-slate-500" htmlFor="topic-tree-effort">
+              推論レベル
+            </label>
+            <select
+              id="topic-tree-effort"
+              value={topicConfig.topic_tree_codex_reasoning_effort}
+              disabled={saving}
+              onChange={(event) =>
+                handleTopicChange({
+                  topic_tree_codex_reasoning_effort: event.target.value as TopicTreeReasoningEffort,
+                })
+              }
+              className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300"
+            >
+              <option value="low">low（最速・既定）</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+              <option value="max">max（最高精度・最も遅い）</option>
+            </select>
+          </div>
+          <p className="text-xs text-slate-500">
+            高いほど精度は上がりますが1回の更新に時間がかかります。次の録音開始から反映されます。
+          </p>
         </div>
       )}
     </section>

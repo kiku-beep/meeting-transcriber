@@ -169,7 +169,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/config/topic-tree")
     async def topic_tree_config() -> dict[str, Any]:
-        return {"topic_tree_enabled": False, "topic_tree_interval_s": 90.0}
+        return {
+            "topic_tree_enabled": False,
+            "topic_tree_interval_s": 90.0,
+            "topic_tree_codex_reasoning_effort": "low",
+        }
 
     @app.get("/api/config/screenshots")
     async def screenshots_config() -> dict[str, Any]:

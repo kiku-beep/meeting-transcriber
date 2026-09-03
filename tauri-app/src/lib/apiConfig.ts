@@ -39,9 +39,12 @@ export async function setTextRefine(enabled: boolean): Promise<{ text_refine_ena
   });
 }
 
+export type TopicTreeReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface TopicTreeConfig {
   topic_tree_enabled: boolean;
   topic_tree_interval_s: number;
+  topic_tree_codex_reasoning_effort: TopicTreeReasoningEffort;
 }
 
 export async function getTopicTreeConfig(): Promise<TopicTreeConfig> {

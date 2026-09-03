@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.config import settings, update_env_file
+from backend.core.summarizer import _CODEX_REASONING_EFFORTS
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -141,12 +142,14 @@ async def get_topic_tree_config():
     return {
         "topic_tree_enabled": settings.topic_tree_enabled,
         "topic_tree_interval_s": settings.topic_tree_interval_s,
+        "topic_tree_codex_reasoning_effort": settings.topic_tree_codex_reasoning_effort,
     }
 
 
 class SetTopicTreeConfigRequest(BaseModel):
     topic_tree_enabled: bool | None = None
     topic_tree_interval_s: float | None = None
+    topic_tree_codex_reasoning_effort: str | None = None
 
 
 @router.put("/topic-tree")
@@ -165,7 +168,19 @@ async def set_topic_tree_config(req: SetTopicTreeConfigRequest):
             raise HTTPException(400, "更新間隔は30〜600秒で指定してください")
         settings.topic_tree_interval_s = req.topic_tree_interval_s
         update_env_file("TOPIC_TREE_INTERVAL_S", str(req.topic_tree_interval_s))
+    if req.topic_tree_codex_reasoning_effort is not None:
+        if req.topic_tree_codex_reasoning_effort not in _CODEX_REASONING_EFFORTS:
+            raise HTTPException(
+                400,
+                "推論レベルは low / medium / high / xhigh / max のいずれかで指定してください",
+            )
+        settings.topic_tree_codex_reasoning_effort = req.topic_tree_codex_reasoning_effort
+        update_env_file(
+            "TOPIC_TREE_CODEX_REASONING_EFFORT",
+            req.topic_tree_codex_reasoning_effort,
+        )
     return {
         "topic_tree_enabled": settings.topic_tree_enabled,
         "topic_tree_interval_s": settings.topic_tree_interval_s,
+        "topic_tree_codex_reasoning_effort": settings.topic_tree_codex_reasoning_effort,
     }

@@ -26,6 +26,7 @@ def test_get_topic_tree_config_returns_current_values(monkeypatch):
     client, _ = _client(monkeypatch)
     monkeypatch.setattr(routes_config.settings, "topic_tree_enabled", True)
     monkeypatch.setattr(routes_config.settings, "topic_tree_interval_s", 120.0)
+    monkeypatch.setattr(routes_config.settings, "topic_tree_codex_reasoning_effort", "high")
 
     response = client.get("/api/config/topic-tree")
 
@@ -33,6 +34,7 @@ def test_get_topic_tree_config_returns_current_values(monkeypatch):
     assert response.json() == {
         "topic_tree_enabled": True,
         "topic_tree_interval_s": 120.0,
+        "topic_tree_codex_reasoning_effort": "high",
     }
 
 
@@ -67,3 +69,39 @@ def test_put_topic_tree_config_rejects_interval_below_one_update(monkeypatch):
     assert response.status_code == 400
     assert "TOPIC_TREE_INTERVAL_S" not in written
     assert routes_config.settings.topic_tree_interval_s == 90.0
+
+
+def test_put_topic_tree_config_persists_reasoning_effort(monkeypatch):
+    from backend.api import routes_config
+
+    client, written = _client(monkeypatch)
+    monkeypatch.setattr(routes_config.settings, "topic_tree_codex_reasoning_effort", "low")
+
+    response = client.put(
+        "/api/config/topic-tree",
+        json={"topic_tree_codex_reasoning_effort": "high"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["topic_tree_codex_reasoning_effort"] == "high"
+    assert routes_config.settings.topic_tree_codex_reasoning_effort == "high"
+    assert written["TOPIC_TREE_CODEX_REASONING_EFFORT"] == "high"
+
+
+def test_put_topic_tree_config_rejects_invalid_reasoning_effort_without_mutating(monkeypatch):
+    from backend.api import routes_config
+
+    client, written = _client(monkeypatch)
+    monkeypatch.setattr(routes_config.settings, "topic_tree_codex_reasoning_effort", "medium")
+
+    response = client.put(
+        "/api/config/topic-tree",
+        json={"topic_tree_codex_reasoning_effort": "invalid"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "推論レベルは low / medium / high / xhigh / max のいずれかで指定してください"
+    )
+    assert routes_config.settings.topic_tree_codex_reasoning_effort == "medium"
+    assert "TOPIC_TREE_CODEX_REASONING_EFFORT" not in written
