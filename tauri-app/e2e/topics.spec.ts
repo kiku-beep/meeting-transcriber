@@ -162,4 +162,44 @@ test.describe("論点ツリー", () => {
     await expect(page.getByText("循環を検出しました", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "論点", exact: true })).toBeVisible();
   });
+
+  // WSのtopic配信が止まっても図が進むこと。以前はWSだけが更新経路で、
+  // セッション取り違え1か所で「手動で更新を押すまで変わらない」に落ちた。
+  test("更新を押さなくても録音中は図が進む", async ({ page }) => {
+    // StrictModeの二重マウントで初回GETは複数回走る。呼び出し回数で切り替えると
+    // 最初から新ラベルを返してしまうため、経過時間で切り替える。
+    const startedAt = Date.now();
+    const SWITCH_AFTER_MS = 5_000;
+    // WSは接続するがtopicは一切流さない（配信が壊れた状況を再現する）。
+    await page.routeWebSocket(/\/ws\/transcript/, (ws) => {
+      ws.send(JSON.stringify({ type: "status", data: runningStatus }));
+    });
+    await page.route("http://127.0.0.1:8000/api/**", async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === "/api/health") return route.fulfill({ json: { status: "ok" } });
+      if (url.pathname === "/api/session/status") return route.fulfill({ json: runningStatus });
+      if (url.pathname === "/api/session/entries") return route.fulfill({ json: { entries: [] } });
+      if (url.pathname === "/api/speakers") return route.fulfill({ json: { speakers: [] } });
+      if (url.pathname === "/api/transcripts") return route.fulfill({ json: { sessions: [] } });
+      if (url.pathname === "/api/transcripts/folders") return route.fulfill({ json: { folders: [] } });
+      if (url.pathname === "/api/topics" && route.request().method() === "GET") {
+        const label = Date.now() - startedAt < SWITCH_AFTER_MS ? "最初の論点" : "あとから出た論点";
+        return route.fulfill({
+          json: {
+            nodes: [{ id: "t1", parent: null, kind: "question", label, status: "open", start_sec: 0, end_sec: 5 }],
+            links: [],
+            active: "t1",
+          },
+        });
+      }
+      return route.fulfill({ json: {} });
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "論点", exact: true }).click();
+    await expect(page.getByText("最初の論点", { exact: true })).toBeVisible();
+
+    // 更新ボタンには触れない。ポーリングだけで置き換わること。
+    await expect(page.getByText("あとから出た論点", { exact: true })).toBeVisible({ timeout: 20_000 });
+  });
 });

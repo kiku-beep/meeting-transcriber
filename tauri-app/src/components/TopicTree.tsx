@@ -16,6 +16,10 @@ const REFRESH_MESSAGES: Record<TopicRefreshStatus, string> = {
   disabled: "論点ツリーが無効です（設定でONにしてください）",
 };
 
+// WSのtopic配信が止まっても図が進むようにするための保険。LLMは呼ばず
+// 保持済みツリーのGETなので、周期更新の最短間隔（20秒）より短くて構わない。
+const TOPIC_POLL_INTERVAL_MS = 10_000;
+
 function isRecording(status: SessionInfo | null): boolean {
   return status?.status === "starting" || status?.status === "running" || status?.status === "paused";
 }
@@ -74,6 +78,40 @@ export default function TopicTree() {
 
     return () => { cancelled = true; };
   }, []);
+
+  // 録音中はWSのpushに加えてポーリングでも取りに行く。WSのtopic配信は
+  // セッションの取り違えなど1か所の不具合で丸ごと止まり、そうなると
+  // 「手動で更新を押すまで図が変わらない」状態に落ちる（実際に起きた）。
+  // これはLLMを呼ばず保持済みのツリーを読むだけなので、二重に持っても安い。
+  // status オブジェクトはWSのpushごとに作り直されるため、真偽値に落として
+  // 依存させる。オブジェクトを依存に置くとintervalが張り直され続ける。
+  const recording = isRecording(sessionStatus);
+  useEffect(() => {
+    if (!recording) return;
+
+    let cancelled = false;
+    let inFlight = false;
+
+    const poll = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        const latest = await fetchTopics();
+        if (cancelled) return;
+        // 空ツリーで上書きしない。録音終了直後などにGETが空を返すため。
+        if (latest.nodes.length === 0) return;
+        setTree(latest);
+        setError(latest.error ? `自動更新に失敗しています: ${latest.error}` : "");
+      } catch {
+        // WSが主経路。ポーリングの失敗で画面へエラーを出さない。
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const timer = setInterval(poll, TOPIC_POLL_INTERVAL_MS);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [recording]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
