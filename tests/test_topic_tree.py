@@ -146,6 +146,20 @@ def test_build_patch_prompt_describes_kinds_and_argument_links():
     assert "反論・制約は必ず別ノード" in prompt
 
 
+def test_build_patch_prompt_describes_topic_detail():
+    from backend.core.topic_tree import TopicTree, build_patch_prompt
+
+    prompt = build_patch_prompt(TopicTree(), [])
+
+    assert '"detail":"補足(120字以内)"' in prompt
+    assert "detail には label に入り切らない中身を1〜2文で書いてください。" in prompt
+    assert "status が open の detail は、何が対立点かと、何が決まれば決着するかを書いてください。" in prompt
+    assert "status が decided の detail は、何にどう決めたかと、その理由を書いてください。" in prompt
+    assert "status が parked の detail は、なぜ保留かと、再開の条件を書いてください。" in prompt
+    assert "status を open から decided へ update するときは、detail も決定内容へ書き換えてください。" in prompt
+    assert "detail は120字以内にしてください。文字起こしから読み取れないなら空文字にしてください。" in prompt
+
+
 def test_apply_patch_filters_deduplicated_and_dangling_links():
     from backend.core.topic_tree import TopicLink, TopicNode, TopicPatch, TopicTree, apply_patch
 
@@ -235,8 +249,62 @@ def test_tree_from_dict_accepts_legacy_nodes_without_kind_or_links():
     )
 
     assert tree.nodes[0].kind == "question"
+    assert tree.nodes[0].detail == ""
     assert tree.links == []
     assert tree_to_dict(tree)["links"] == []
+
+
+def test_apply_patch_preserves_and_truncates_add_detail():
+    from backend.core.topic_tree import MAX_DETAIL_LEN, TopicTree, apply_patch, parse_patch
+
+    detail = "あ" * (MAX_DETAIL_LEN + 1)
+    patch = parse_patch(
+        json.dumps(
+            {"add": [{**_node("n1"), "detail": detail}]},
+            ensure_ascii=False,
+        )
+    )
+
+    assert patch.add[0].detail == detail
+    result = apply_patch(TopicTree(), patch)
+
+    assert result.nodes[0].detail == "あ" * MAX_DETAIL_LEN
+
+
+def test_apply_patch_normalizes_non_string_detail_to_empty():
+    from backend.core.topic_tree import TopicNode, TopicPatch, TopicTree, apply_patch
+
+    node = TopicNode.model_construct(id="n1", label="論点", detail=123)
+
+    result = apply_patch(TopicTree(), TopicPatch(add=[node]))
+
+    assert result.nodes[0].detail == ""
+
+
+def test_apply_patch_updates_detail_when_non_blank():
+    from backend.core.topic_tree import TopicNode, TopicPatch, TopicTree, apply_patch
+
+    tree = TopicTree(nodes=[TopicNode(id="n1", label="論点", detail="以前の理由")])
+
+    result = apply_patch(
+        tree,
+        TopicPatch(update=[{"id": "n1", "detail": "新しい結論と理由"}]),
+    )
+
+    assert result.nodes[0].detail == "新しい結論と理由"
+
+
+def test_apply_patch_keeps_existing_detail_when_update_detail_is_blank():
+    from backend.core.topic_tree import TopicNode, TopicPatch, TopicTree, apply_patch
+
+    tree = TopicTree(nodes=[TopicNode(id="n1", label="論点", detail="決定理由")])
+
+    result = apply_patch(
+        tree,
+        TopicPatch(update=[{"id": "n1", "detail": "  "}]),
+    )
+
+    assert result.nodes[0].detail == "決定理由"
 
 
 def test_apply_patch_adds_nodes_while_preserving_parent_relationships():

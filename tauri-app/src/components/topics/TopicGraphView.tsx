@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   TopicKind,
@@ -22,6 +22,11 @@ const LANE_LABELS: Record<TopicKind, string> = {
   constraint: "制約",
   decision: "合意・保留",
 };
+const STATUS_LABELS: Record<TopicNodeData["status"], string> = {
+  open: "未決",
+  decided: "決定",
+  parked: "保留",
+};
 const LANE_HEIGHT = 110;
 const NODE_X_INTERVAL = 180;
 const GRAPH_LEFT = 32;
@@ -35,6 +40,23 @@ const LINK_LABELS: Record<TopicLinkType, string> = {
   objects: "反論",
   constrains: "制約",
   depends: "前提",
+};
+const OUTGOING_RELATION_LABELS: Record<TopicLinkType, string> = {
+  supports: "を支持",
+  objects: "に反論",
+  constrains: "を制約",
+  depends: "が前提",
+};
+const INCOMING_RELATION_LABELS: Record<TopicLinkType, string> = {
+  supports: "から支持されている",
+  objects: "から反論されている",
+  constrains: "に制約されている",
+  depends: "の前提になっている",
+};
+const DETAIL_EMPTY_MESSAGES: Record<TopicNodeData["status"], string> = {
+  open: "まだ争点と決着条件を抽出できていません。",
+  decided: "決定の理由をまだ抽出できていません。",
+  parked: "保留の理由をまだ抽出できていません。",
 };
 
 const LINK_META: Record<TopicLinkType, { stroke: string; dash?: string }> = {
@@ -66,6 +88,18 @@ function finiteStart(node: TopicNodeData): number {
   return Number.isFinite(node.start_sec) ? node.start_sec : 0;
 }
 
+function formatTime(seconds: number): string {
+  const safeSeconds = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  const minutes = Math.floor(safeSeconds / 60);
+  return `${minutes}:${String(safeSeconds % 60).padStart(2, "0")}`;
+}
+
+function formatTimeRange(node: TopicNodeData): string {
+  const start = finiteStart(node);
+  const end = Number.isFinite(node.end_sec) ? Math.max(0, node.end_sec) : start;
+  return end > start ? `${formatTime(start)}〜${formatTime(end)}` : formatTime(start);
+}
+
 function validLinks(tree: TopicTreeData): TopicLink[] {
   const nodeIds = new Set(tree.nodes.map((node) => node.id));
   const rawLinks = Array.isArray(tree.links) ? tree.links : [];
@@ -77,6 +111,53 @@ function validLinks(tree: TopicTreeData): TopicLink[] {
     && nodeIds.has(link.target)
     && isTopicLinkType(link.type)
   ));
+}
+
+interface TopicRelation {
+  nodeId: string;
+  text: string;
+}
+
+function buildDetailRelations(
+  node: TopicNodeData,
+  nodes: TopicNodeData[],
+  links: TopicLink[],
+): TopicRelation[] {
+  const nodesById = new Map(nodes.map((item) => [item.id, item]));
+  const relations: TopicRelation[] = [];
+
+  links
+    .filter((link) => link.source === node.id)
+    .forEach((link) => {
+      const target = nodesById.get(link.target);
+      if (!target) return;
+      relations.push({
+        nodeId: target.id,
+        text: `${target.label} ${OUTGOING_RELATION_LABELS[link.type]}`,
+      });
+    });
+  links
+    .filter((link) => link.target === node.id)
+    .forEach((link) => {
+      const source = nodesById.get(link.source);
+      if (!source) return;
+      relations.push({
+        nodeId: source.id,
+        text: `${source.label} ${INCOMING_RELATION_LABELS[link.type]}`,
+      });
+    });
+
+  if (node.parent !== null) {
+    const parent = nodesById.get(node.parent);
+    if (parent) relations.push({ nodeId: parent.id, text: `${parent.label} の中の論点` });
+  }
+  nodes
+    .filter((child) => child.parent === node.id)
+    .forEach((child) => {
+      relations.push({ nodeId: child.id, text: `下位の論点: ${child.label}` });
+    });
+
+  return relations;
 }
 
 function buildLinkNeighbors(nodes: TopicNodeData[], links: TopicLink[]): Map<string, string[]> {
@@ -261,6 +342,8 @@ function renderNode(
   layout: TopicGraphLayout,
   activeId: string | null,
   onSeek: Props["onSeek"],
+  selectedId: string | null,
+  onSelect: (nodeId: string) => void,
   path: Set<string> = new Set(),
 ): ReactNode {
   const position = layout.positions.get(node.id);
@@ -274,6 +357,8 @@ function renderNode(
       position={position}
       active={activeId === node.id}
       onSeek={onSeek}
+      onSelect={onSelect}
+      selected={selectedId === node.id}
     >
       {(childrenByParent.get(node.id) ?? []).map((child) => renderNode(
         child,
@@ -281,6 +366,8 @@ function renderNode(
         layout,
         activeId,
         onSeek,
+        selectedId,
+        onSelect,
         nextPath,
       ))}
     </TopicNode>
@@ -288,12 +375,19 @@ function renderNode(
 }
 
 export default function TopicGraphView({ tree, onSeek }: Props) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const markerId = `topic-arrow-${useId().replace(/:/g, "")}`;
   const layout = calculateLayout(tree);
   const links = validLinks(tree);
   const childrenByParent = buildChildrenByParent(tree.nodes);
   const roots = findRenderRoots(tree.nodes, childrenByParent);
   const cycleDetected = hasParentCycle(tree.nodes);
+  const selectedNode = selectedId === null
+    ? undefined
+    : tree.nodes.find((node) => node.id === selectedId);
+  const selectedRelations = selectedNode
+    ? buildDetailRelations(selectedNode, tree.nodes, links)
+    : [];
 
   return (
     <div className="topic-graph" role="tree" aria-label="論点マップ">
@@ -305,6 +399,7 @@ export default function TopicGraphView({ tree, onSeek }: Props) {
           height={layout.height}
           viewBox={`0 0 ${layout.width} ${layout.height}`}
           aria-label="論点の関係図"
+          onClick={() => setSelectedId(null)}
         >
           <defs>
             <marker
@@ -351,10 +446,49 @@ export default function TopicGraphView({ tree, onSeek }: Props) {
             })}
           </g>
           <g className="topic-graph__nodes">
-            {roots.map((node) => renderNode(node, childrenByParent, layout, tree.active, onSeek))}
+            {roots.map((node) => renderNode(
+              node,
+              childrenByParent,
+              layout,
+              tree.active,
+              onSeek,
+              selectedId,
+              setSelectedId,
+            ))}
           </g>
         </svg>
       </div>
+      {selectedNode && (
+        <aside className="topic-graph__detail" aria-label="論点の詳細">
+          <div className="topic-graph__detail-head">
+            <span>{LANE_LABELS[nodeKind(selectedNode)]}</span>
+            <span>{STATUS_LABELS[selectedNode.status] ?? STATUS_LABELS.open}</span>
+            <span>{formatTimeRange(selectedNode)}</span>
+            <button type="button" onClick={() => setSelectedId(null)}>閉じる</button>
+          </div>
+          <h3>{selectedNode.label}</h3>
+          {typeof selectedNode.detail === "string" && selectedNode.detail ? (
+            <p className="topic-graph__detail-body">{selectedNode.detail}</p>
+          ) : (
+            <p className="topic-graph__detail-body topic-graph__detail-body--empty">
+              {/* 保存済みJSONのstatusは検証を通らずに読み込まれ得るため、未知値でも
+                  空欄にせず未決の文言へ寄せる。 */}
+              {DETAIL_EMPTY_MESSAGES[selectedNode.status] ?? DETAIL_EMPTY_MESSAGES.open}
+            </p>
+          )}
+          {selectedRelations.length > 0 && (
+            <ul className="topic-graph__detail-relations">
+              {selectedRelations.map((relation, index) => (
+                <li key={`${relation.nodeId}-${index}`}>
+                  <button type="button" onClick={() => setSelectedId(relation.nodeId)}>
+                    {relation.text}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </aside>
+      )}
       <div className="topic-graph__legend" aria-label="論点マップの凡例">
         {LANE_KINDS.map((kind) => <span key={kind}><i className={`topic-graph__legend-dot topic-graph__legend-dot--${kind}`} />{LANE_LABELS[kind]}</span>)}
         {(Object.keys(LINK_META) as TopicLinkType[]).map((type) => (

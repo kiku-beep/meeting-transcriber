@@ -114,6 +114,7 @@ def test_load_topics_upgrades_legacy_json_without_kind_or_links(monkeypatch, tmp
             "parent": None,
             "label": "旧論点",
             "kind": "question",
+            "detail": "",
             "status": "open",
             "start_sec": 0.0,
             "end_sec": 1.0,

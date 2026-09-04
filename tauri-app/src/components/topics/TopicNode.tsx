@@ -12,6 +12,8 @@ interface Props {
   active: boolean;
   /** 与えると時刻から再生できる（履歴表示用）。ライブでは省略する。 */
   onSeek?: (seconds: number) => void;
+  onSelect?: (nodeId: string) => void;
+  selected?: boolean;
   children?: ReactNode;
 }
 
@@ -41,33 +43,38 @@ function formatTime(seconds: number): string {
   return `${minutes}:${String(safeSeconds % 60).padStart(2, "0")}`;
 }
 
-export default function TopicNode({ node, position, active, onSeek, children }: Props) {
+export default function TopicNode({ node, position, active, onSeek, onSelect, selected, children }: Props) {
   const kind = isTopicKind(node.kind) ? node.kind : "question";
   const colors = KIND_META[kind];
   const status = STATUS_META[node.status] ?? STATUS_META.open;
+  const interactive = Boolean(onSelect || onSeek);
 
-  const seek = () => onSeek?.(node.start_sec);
+  const selectAndSeek = () => {
+    onSelect?.(node.id);
+    onSeek?.(node.start_sec);
+  };
   const handleClick = (event: MouseEvent<SVGGElement>) => {
     event.stopPropagation();
-    seek();
+    selectAndSeek();
   };
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
-    if (!onSeek || (event.key !== "Enter" && event.key !== " ")) return;
+    if (!interactive || (event.key !== "Enter" && event.key !== " ")) return;
     event.preventDefault();
     event.stopPropagation();
-    seek();
+    selectAndSeek();
   };
 
   return (
     <g
-      className={`topic-node ${active ? "topic-node--active" : ""}`}
+      className={`topic-node ${active ? "topic-node--active" : ""} ${selected ? "topic-node--selected" : ""}`}
       data-topic-node-id={node.id}
       data-topic-active={active ? "true" : "false"}
+      data-topic-selected={selected ? "true" : "false"}
       role="button"
-      tabIndex={onSeek ? 0 : -1}
-      aria-disabled={onSeek ? undefined : "true"}
+      tabIndex={interactive ? 0 : -1}
+      aria-disabled={interactive ? undefined : "true"}
       aria-label={`${node.label}（開始時刻 ${formatTime(node.start_sec)}）`}
-      onClick={onSeek ? handleClick : undefined}
+      onClick={interactive ? handleClick : undefined}
       onKeyDown={handleKeyDown}
     >
       <rect
@@ -77,8 +84,8 @@ export default function TopicNode({ node, position, active, onSeek, children }: 
         height={BOX_HEIGHT}
         rx={8}
         fill={colors.fill}
-        stroke={active ? "#b7791f" : colors.stroke}
-        strokeWidth={active ? 3 : 1.5}
+        stroke={active ? "#b7791f" : selected ? "#7c3aed" : colors.stroke}
+        strokeWidth={active || selected ? 3 : 1.5}
       />
       <text
         x={position.x + 10}

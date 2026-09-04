@@ -273,6 +273,7 @@ export interface TopicNode {
   id: string;
   parent: string | null;
   label: string;
+  detail?: string;
   kind: TopicKind;
   status: TopicStatus;
   start_sec: number;

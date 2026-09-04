@@ -17,12 +17,12 @@ const runningStatus = {
 
 const tree = {
   nodes: [
-    { id: "t1", parent: null, kind: "question", label: "見積PDFの経路", status: "open", start_sec: 30, end_sec: 90 },
+    { id: "t1", parent: null, kind: "question", label: "見積PDFの経路", detail: "楽楽ネイティブ出力に寄せるか、今のGAS変換を直すか。処理用アドレスの配送が通るかが決まれば決着します。", status: "open", start_sec: 30, end_sec: 90 },
     { id: "t2", parent: "t1", kind: "claim", label: "楽楽ネイティブ", status: "open", start_sec: 95, end_sec: 140 },
-    { id: "t3", parent: "t1", kind: "claim", label: "現行GASを改修", status: "parked", start_sec: 150, end_sec: 200 },
+    { id: "t3", parent: "t1", kind: "claim", label: "現行GASを改修", detail: "再保存で印刷範囲が落ちる問題が未解決のため保留。raw XML置換で回避できるか確認できたら再開します。", status: "parked", start_sec: 150, end_sec: 200 },
     { id: "t4", parent: "t1", kind: "constraint", label: "処理用addr未配送", status: "open", start_sec: 210, end_sec: 260 },
     { id: "t5", parent: "t1", kind: "constraint", label: "再保存で印刷落ち", status: "open", start_sec: 265, end_sec: 310 },
-    { id: "t6", parent: "t1", kind: "decision", label: "楽楽採用/addr前提", status: "decided", start_sec: 320, end_sec: 380 },
+    { id: "t6", parent: "t1", kind: "decision", label: "楽楽採用/addr前提", detail: "楽楽ネイティブ出力を採用。GAS改修は再保存の副作用が大きく、処理用アドレスの配送設定を直す方が影響が小さいため。", status: "decided", start_sec: 320, end_sec: 380 },
     { id: "t7", parent: null, kind: "question", label: "周知のタイミング", status: "open", start_sec: 400, end_sec: 420 },
     { id: "t8", parent: "t7", kind: "claim", label: "今週中に全社", status: "open", start_sec: 430, end_sec: 460 },
     { id: "t9", parent: "t7", kind: "constraint", label: "営業は月末で多忙", status: "open", start_sec: 470, end_sec: 500 },
@@ -61,4 +61,15 @@ test("議論マップのスクリーンショットを撮る", async ({ page }) 
   await page.getByRole("button", { name: "論点", exact: true }).click();
   await page.waitForTimeout(600);
   await page.screenshot({ path: "test-results/argmap-live.png", fullPage: true });
+
+  // 四角クリックで開く詳細パネルも撮る。未決・決定・detail無しで見え方が変わる。
+  for (const [label, name] of [
+    ["見積PDFの経路", "open"],
+    ["楽楽採用/addr前提", "decided"],
+    ["営業は月末で多忙", "empty"],
+  ] as const) {
+    await page.getByText(label, { exact: true }).click();
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: `test-results/argmap-detail-${name}.png`, fullPage: true });
+  }
 });

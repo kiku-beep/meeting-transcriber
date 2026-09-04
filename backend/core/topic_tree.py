@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 
 MAX_LABEL_LEN = 15
+MAX_DETAIL_LEN = 120
 VALID_STATUSES = ("open", "decided", "parked")
 VALID_KINDS = ("question", "claim", "constraint", "decision")
 VALID_LINK_TYPES = ("supports", "objects", "constrains", "depends")
@@ -24,6 +25,7 @@ class TopicNode(BaseModel):
     id: str
     parent: str | None = None
     label: str
+    detail: str = ""
     kind: str = "question"
     status: str = "open"
     start_sec: float = 0.0
@@ -75,11 +77,13 @@ def build_patch_prompt(tree: TopicTree, entries: list[dict]) -> str:
     # 孤児として全部捨てられてツリーが永久に空になる（実測で確認済み）。
     schema = (
         '{"add":[{"id":"t1","parent":null,"label":"論点(15字以内)",'
+        '"detail":"補足(120字以内)",'
         '"kind":"question|claim|constraint|decision",'
         '"status":"open|decided|parked","start_sec":0,"end_sec":0}], '
         '"add_links":[{"source":"t1","target":"t2",'
         '"type":"supports|objects|constrains|depends"}], '
-        '"update":[{"id":"t1","status":"open|decided|parked","end_sec":0}], '
+        '"update":[{"id":"t1","status":"open|decided|parked",'
+        '"detail":"補足(120字以内)","end_sec":0}], '
         '"active":"現在話している論点のid"}'
     )
     return f"""会議の文字起こしから、論点の階層ツリーを増分更新してください。
@@ -109,6 +113,12 @@ status は open / decided / parked のいずれかにしてください。
 add_links の source / target は既存idか同じパッチ内の新規idだけにしてください。
 リンクの type は supports / objects / constrains / depends のいずれかにしてください。
 リンクが1本も無い更新では add_links を [] にしてください。
+detail には label に入り切らない中身を1〜2文で書いてください。
+status が open の detail は、何が対立点かと、何が決まれば決着するかを書いてください。
+status が decided の detail は、何にどう決めたかと、その理由を書いてください。
+status が parked の detail は、なぜ保留かと、再開の条件を書いてください。
+status を open から decided へ update するときは、detail も決定内容へ書き換えてください。
+detail は120字以内にしてください。文字起こしから読み取れないなら空文字にしてください。
 文字起こしにない内容を補わないでください。"""
 
 
@@ -267,11 +277,14 @@ def _normalize_node(node: TopicNode) -> TopicNode | None:
     parent = node.parent
     if isinstance(parent, str) and not parent.strip():
         parent = None
+    detail = node.detail if isinstance(node.detail, str) else ""
+    detail = detail.strip()[:MAX_DETAIL_LEN]
 
     return TopicNode(
         id=node.id,
         parent=parent,
         label=node.label[:MAX_LABEL_LEN],
+        detail=detail,
         kind=node.kind if node.kind in VALID_KINDS else "question",
         status=node.status if node.status in VALID_STATUSES else "open",
         start_sec=start_sec,
@@ -352,6 +365,11 @@ def apply_patch(tree: TopicTree, patch: TopicPatch) -> TopicTree:
         status = change.get("status")
         if status in VALID_STATUSES:
             node.status = status
+
+        if isinstance(change.get("detail"), str):
+            detail = change["detail"].strip()
+            if detail:
+                node.detail = detail[:MAX_DETAIL_LEN]
 
         if "end_sec" in change:
             try:

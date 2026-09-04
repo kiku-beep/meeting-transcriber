@@ -275,6 +275,15 @@ body { font-family: "Segoe UI", "Yu Gothic UI", sans-serif; font-size: 14px; }
 .topic-node__status { font-size: 10px; font-weight: 600; }
 .topic-node__active-badge text { font-size: 9px; font-weight: 700; }
 .topic-graph__guard { margin: 0 0 8px 4px; padding: 6px 10px; border: 1px dashed var(--workspace-warning); color: var(--workspace-warning); font-size: 11px; }
+.topic-graph__detail { margin: 4px 4px 10px; padding: 10px 12px; border: 1px solid var(--workspace-border); border-radius: 8px; background: var(--workspace-bg); }
+.topic-graph__detail-head { display: flex; align-items: center; gap: 8px; color: var(--workspace-muted); font-size: 11px; }
+.topic-graph__detail-head button { margin-left: auto; padding: 2px 10px; border: 1px solid var(--workspace-border); border-radius: 999px; background: transparent; color: var(--workspace-muted); font: inherit; cursor: pointer; }
+.topic-graph__detail-head button:hover { border-color: var(--workspace-accent); color: var(--workspace-accent); }
+.topic-graph__detail h3 { margin: 6px 0 4px; font-size: 14px; }
+.topic-graph__detail-body { margin: 0; color: var(--workspace-text); font-size: 12px; line-height: 1.6; }
+.topic-graph__detail-body--empty { color: var(--workspace-muted); }
+.topic-graph__detail-relations { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 12px; }
+.topic-graph__detail-relations button { padding: 0; border: 0; background: none; color: var(--workspace-accent); font: inherit; text-align: left; cursor: pointer; }
 .topic-graph__legend { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 4px 8px; color: var(--workspace-muted); font-size: 11px; }
 .topic-graph__legend span { display: inline-flex; align-items: center; gap: 5px; }
 .topic-graph__legend-dot { display: inline-block; width: 10px; height: 10px; border: 1px solid; border-radius: 3px; }

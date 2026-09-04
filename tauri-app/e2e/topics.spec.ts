@@ -4,6 +4,7 @@ type TopicNode = {
   id: string;
   parent: string | null;
   label: string;
+  detail?: string;
   status: "open" | "decided" | "parked";
   start_sec: number;
   end_sec: number;
@@ -22,7 +23,7 @@ const runningStatus = {
 
 const initialTree: TopicTree = {
   nodes: [
-    { id: "root", parent: null, label: "プロジェクト計画", status: "open", start_sec: 0, end_sec: 60 },
+    { id: "root", parent: null, label: "プロジェクト計画", detail: "予算と人員のどちらを優先するか。責任者が決まれば決着します。", status: "open", start_sec: 0, end_sec: 60 },
     { id: "child", parent: "root", label: "納期を決める", status: "decided", start_sec: 30, end_sec: 55 },
     { id: "parked", parent: "root", label: "保留事項", status: "parked", start_sec: 70, end_sec: 75 },
   ],
@@ -109,6 +110,23 @@ test.describe("論点ツリー", () => {
     await expect(page.getByText("未決", { exact: true })).toBeVisible();
     await expect(page.getByText("決定", { exact: true })).toBeVisible();
     await expect(page.getByText("保留", { exact: true })).toBeVisible();
+  });
+
+  test("四角をクリックすると詳細が出る", async ({ page }) => {
+    await installApiRoutes(page);
+    await page.goto("/");
+    await page.getByRole("button", { name: "論点", exact: true }).click();
+
+    const panel = page.getByRole("complementary", { name: "論点の詳細" });
+    await page.getByText("プロジェクト計画", { exact: true }).click();
+    await expect(panel).toBeVisible();
+    await expect(panel.getByText("予算と人員のどちらを優先するか。責任者が決まれば決着します。", { exact: true })).toBeVisible();
+
+    await page.getByText("納期を決める", { exact: true }).click();
+    await expect(panel.getByText("決定の理由をまだ抽出できていません。", { exact: true })).toBeVisible();
+
+    await panel.getByRole("button", { name: "閉じる", exact: true }).click();
+    await expect(panel).toBeHidden();
   });
 
   test("録音中の空ツリーは抽出中と表示する", async ({ page }) => {
