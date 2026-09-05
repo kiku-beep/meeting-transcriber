@@ -1,9 +1,7 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
-import {
-  getFallbackDiagnostics,
-  type SummaryResult,
-} from "../../lib/types";
+import type { SummaryResult } from "../../lib/types";
+import { getUsagePresentation } from "../../lib/summaryUsage";
 
 interface Props {
   onGenerate: () => void;
@@ -21,11 +19,7 @@ export default function SummaryView({
   const [copied, setCopied] = useState(false);
   const [copiedSlack, setCopiedSlack] = useState(false);
   const usage = summaryResult?.usage;
-  const usedClaude = usage?.billing === "claude-subscription";
-  const usedCodex = usage?.billing === "codex-subscription";
-  const usedGemini = usage?.billing === "api"
-    || (!usage?.billing && Boolean(usage?.fallback_from));
-  const fallbackDiagnostics = getFallbackDiagnostics(usage);
+  const { provider, diagnostics: fallbackDiagnostics } = getUsagePresentation(usage, "history");
 
   return (
     <div className="summary-view space-y-4">
@@ -39,9 +33,9 @@ export default function SummaryView({
         </button>
       </div>
 
-      {(usedClaude || usedCodex || usedGemini) && (
+      {provider && (
         <div className="flex items-center gap-2 text-xs flex-wrap">
-          {usedClaude && (
+          {provider === "claude-code" && (
             <>
               <span className="summary-view__badge summary-view__badge--accent">
                 Claude Code
@@ -51,7 +45,7 @@ export default function SummaryView({
               </span>
             </>
           )}
-          {usedCodex && (
+          {provider === "codex-cli" && (
             <>
               <span className="summary-view__badge summary-view__badge--accent">
                 Codex CLI
@@ -61,7 +55,7 @@ export default function SummaryView({
               </span>
             </>
           )}
-          {usedGemini && (
+          {provider === "gemini" && (
             <>
               <span className="summary-view__badge summary-view__badge--warning">
                 Gemini

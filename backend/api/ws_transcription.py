@@ -12,10 +12,9 @@ from starlette.websockets import WebSocketState
 
 from backend.core.topic_tree import VALID_LINK_TYPES, tree_to_dict
 from backend.models.session import (
-    get_session,
-    get_or_create_session,
     register_client_connection,
     remove_empty_idle_client_session,
+    resolve_client_session,
     unregister_client_connection,
 )
 
@@ -105,9 +104,7 @@ async def ws_transcript(ws: WebSocket, client_id: str = Query("default")):
 
     if use_client_session:
         register_client_connection(client_id)
-        session = get_or_create_session(client_id)
-    else:
-        session = get_session()
+    session = resolve_client_session(client_id)
     last_index = 0
     last_status: dict | None = None
 

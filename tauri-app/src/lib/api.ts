@@ -97,10 +97,6 @@ export function getAuthToken(): string {
   return _authToken;
 }
 
-// Keep backward-compatible exports (computed from current config)
-export const BASE_URL = DEFAULT_URL; // NOTE: use getBaseUrl() for dynamic URL
-export const WS_URL = DEFAULT_URL.replace(/^http/, "ws");
-
 // ── Client ID for multi-session support ──────────────────────────
 export function getClientId(): string {
   return _clientId;

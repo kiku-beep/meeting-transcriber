@@ -49,8 +49,7 @@ def test_get_topics_returns_current_tree(monkeypatch):
     from backend.api import routes_topics
 
     session = _session(_tree())
-    monkeypatch.setattr(routes_topics, "get_session", lambda: session)
-    monkeypatch.setattr(routes_topics, "get_or_create_session", lambda client_id: session)
+    monkeypatch.setattr(routes_topics, "resolve_client_session", lambda client_id: session)
 
     response = _client().get("/api/topics?client_id=topic-client")
 
@@ -80,7 +79,7 @@ def test_get_topics_reports_last_periodic_failure(monkeypatch):
 
     tracker = SimpleNamespace(tree=_tree(), topic_queue=asyncio.Queue(), last_error="RuntimeError: boom")
     session = _session(tracker=tracker)
-    monkeypatch.setattr(routes_topics, "get_session", lambda: session)
+    monkeypatch.setattr(routes_topics, "resolve_client_session", lambda client_id: session)
 
     response = _client().get("/api/topics")
 
@@ -91,7 +90,11 @@ def test_get_topics_reports_last_periodic_failure(monkeypatch):
 def test_get_topics_returns_empty_tree_when_session_is_not_running(monkeypatch):
     from backend.api import routes_topics
 
-    monkeypatch.setattr(routes_topics, "get_session", lambda: _session(_tree(), status="idle"))
+    monkeypatch.setattr(
+        routes_topics,
+        "resolve_client_session",
+        lambda client_id: _session(_tree(), status="idle"),
+    )
 
     response = _client().get("/api/topics")
 
@@ -113,8 +116,7 @@ def test_refresh_topics_calls_tracker(monkeypatch):
             return "updated"
 
     session = _session(tracker=FakeTracker())
-    monkeypatch.setattr(routes_topics, "get_session", lambda: session)
-    monkeypatch.setattr(routes_topics, "get_or_create_session", lambda client_id: session)
+    monkeypatch.setattr(routes_topics, "resolve_client_session", lambda client_id: session)
 
     response = _client().post("/api/topics/refresh", json={"client_id": "refresh-client"})
 
@@ -123,6 +125,33 @@ def test_refresh_topics_calls_tracker(monkeypatch):
     assert response.json()["updated"] is True
     assert response.json()["status"] == "updated"
     assert response.json()["tree"]["active"] == "topic-1"
+
+
+def test_refresh_topics_query_client_id_takes_priority_over_request_body(monkeypatch):
+    from backend.api import routes_topics
+
+    class FakeTracker:
+        tree = _tree()
+
+        async def refresh_now(self):
+            return "updated"
+
+    requested_ids = []
+    session = _session(tracker=FakeTracker())
+
+    def resolve(client_id):
+        requested_ids.append(client_id)
+        return session
+
+    monkeypatch.setattr(routes_topics, "resolve_client_session", resolve)
+
+    response = _client().post(
+        "/api/topics/refresh?client_id=query-client",
+        json={"client_id": "body-client"},
+    )
+
+    assert response.status_code == 200
+    assert requested_ids == ["query-client"]
 
 
 def test_refresh_topics_returns_409_for_duplicate_request(monkeypatch):
@@ -150,8 +179,7 @@ def test_refresh_topics_returns_200_when_tracker_has_nothing_to_update(monkeypat
             return "no_new_entries"
 
     session = _session(tracker=FakeTracker())
-    monkeypatch.setattr(routes_topics, "get_session", lambda: session)
-    monkeypatch.setattr(routes_topics, "get_or_create_session", lambda client_id: session)
+    monkeypatch.setattr(routes_topics, "resolve_client_session", lambda client_id: session)
 
     response = _client().post("/api/topics/refresh", json={"client_id": "no-op-client"})
 
@@ -184,8 +212,7 @@ def test_refresh_topics_returns_500_when_tracker_fails(monkeypatch):
             raise RuntimeError("provider failed")
 
     session = _session(tracker=FakeTracker())
-    monkeypatch.setattr(routes_topics, "get_session", lambda: session)
-    monkeypatch.setattr(routes_topics, "get_or_create_session", lambda client_id: session)
+    monkeypatch.setattr(routes_topics, "resolve_client_session", lambda client_id: session)
 
     response = _client().post("/api/topics/refresh", json={"client_id": "error-client"})
 
@@ -204,8 +231,7 @@ def test_refresh_topics_returns_200_noop_when_topic_tree_is_disabled(monkeypatch
             return "disabled"
 
     session = _session(tracker=FakeTracker())
-    monkeypatch.setattr(routes_topics, "get_session", lambda: session)
-    monkeypatch.setattr(routes_topics, "get_or_create_session", lambda client_id: session)
+    monkeypatch.setattr(routes_topics, "resolve_client_session", lambda client_id: session)
 
     response = _client().post("/api/topics/refresh", json={"client_id": "disabled-client"})
 

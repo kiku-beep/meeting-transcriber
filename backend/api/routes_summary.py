@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from backend.config import settings, update_env_file
 from backend.core.summarizer import GEMINI_MODELS, SUMMARY_ENGINES, generate_summary
 from backend.core.live_ai import generate_live_ai, select_live_entries
-from backend.models.session import get_or_create_session, get_session
+from backend.models.session import resolve_client_session
 from backend.storage.file_store import (
     load_summary, load_transcript, save_summary, update_session_name, list_sessions,
 )
@@ -39,7 +39,7 @@ async def generate_live(req: LiveAiRequest):
     if req.mode == "question" and not (req.question or "").strip():
         raise HTTPException(400, "質問を入力してください")
 
-    session = get_session() if client_id == "default" else get_or_create_session(client_id)
+    session = resolve_client_session(client_id)
     entries = [entry.model_dump() for entry in session.entries]
     try:
         selected, range_start, range_end = select_live_entries(entries, req.range_minutes)

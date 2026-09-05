@@ -153,42 +153,6 @@ export interface SummaryUsage {
   fallback_details?: Record<string, string>;
 }
 
-export interface FallbackDiagnostic {
-  provider: string;
-  label: string;
-  detail: string;
-}
-
-const FALLBACK_PROVIDER_LABELS: Record<string, string> = {
-  "claude-code": "Claude",
-  "codex-cli": "Codex",
-  gemini: "Gemini",
-};
-
-export function getFallbackDiagnostics(
-  usage?: SummaryUsage,
-): FallbackDiagnostic[] {
-  if (usage?.fallback_chain?.length && usage.fallback_details) {
-    return usage.fallback_chain.flatMap((provider) => {
-      const detail = usage.fallback_details?.[provider];
-      return detail
-        ? [{
-            provider,
-            label: FALLBACK_PROVIDER_LABELS[provider] ?? provider,
-            detail,
-          }]
-        : [];
-    });
-  }
-  if (!usage?.fallback_detail) return [];
-  const provider = usage.fallback_from ?? "claude-code";
-  return [{
-    provider,
-    label: FALLBACK_PROVIDER_LABELS[provider] ?? provider,
-    detail: usage.fallback_detail,
-  }];
-}
-
 export interface SummaryResult {
   session_id: string;
   summary: string;

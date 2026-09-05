@@ -5,9 +5,8 @@ from pydantic import BaseModel
 from backend.core.transcriber import AVAILABLE_MODELS, VRAM_REQUIREMENTS, warm_disk_cache
 from backend.models.session import (
     TranscriptionSession,
-    get_or_create_session,
-    get_session,
     release_model_switch,
+    resolve_client_session,
     reserve_model_switch,
 )
 
@@ -53,9 +52,7 @@ class ModelWarmCacheRequest(BaseModel):
 
 
 def get_client_session(client_id: str = Query("default")) -> TranscriptionSession:
-    if client_id and client_id != "default":
-        return get_or_create_session(client_id)
-    return get_session()
+    return resolve_client_session(client_id or "default")
 
 
 @router.post("/start")

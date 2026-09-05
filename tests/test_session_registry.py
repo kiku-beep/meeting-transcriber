@@ -22,6 +22,27 @@ def test_idle_client_sessions_do_not_consume_concurrency_slots(monkeypatch):
     assert session_mod.active_session_count() == 0
 
 
+@pytest.mark.parametrize(
+    ("client_id", "uses_default"),
+    [
+        ("default", True),
+        ("", False),
+        (" default ", False),
+        (" a ", False),
+    ],
+)
+def test_resolve_client_session_uses_default_only_for_exact_default(
+    monkeypatch, client_id, uses_default
+):
+    default = reset_registry(monkeypatch)
+
+    resolved = session_mod.resolve_client_session(client_id)
+
+    assert (resolved is default) is uses_default
+    if not uses_default:
+        assert session_mod._sessions[client_id] is resolved
+
+
 def test_active_session_limit_blocks_new_recordings(monkeypatch):
     reset_registry(monkeypatch)
     monkeypatch.setattr(session_mod.settings, "max_concurrent_sessions", 1)

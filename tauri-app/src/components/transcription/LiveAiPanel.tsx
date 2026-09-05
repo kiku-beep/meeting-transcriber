@@ -1,11 +1,8 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { generateLiveAi } from "../../lib/apiSummary";
-import {
-  getFallbackDiagnostics,
-  type LiveAiMode,
-  type LiveAiResult,
-} from "../../lib/types";
+import type { LiveAiMode, LiveAiResult } from "../../lib/types";
+import { getUsagePresentation } from "../../lib/summaryUsage";
 
 interface Props {
   open: boolean;
@@ -120,25 +117,25 @@ export default function LiveAiPanel({ open, sessionId, hasEntries, onClose }: Pr
           {history.length === 0 ? (
             <div className="panel-empty">実行結果がここに残ります</div>
           ) : history.map((item) => {
-            const fallbackDiagnostics = getFallbackDiagnostics(item.usage);
+            const { provider, diagnostics: fallbackDiagnostics } = getUsagePresentation(item.usage, "live");
             return (
               <article className="ai-result" key={`${item.generated_at}-${item.mode}`}>
                 <div className="ai-result__meta">
                   <span className="range-badge">{item.range_minutes ? `直近${item.range_minutes}分` : "会議全体"}</span>
                   <span>{formatClock(item.range_end_seconds)}時点</span>
-                  {item.usage.billing === "claude-subscription" && (
+                  {provider === "claude-code" && (
                     <>
                       <span className="summary-view__badge summary-view__badge--accent">Claude Code</span>
                       <span className="summary-view__badge summary-view__badge--muted">Claudeサブスク枠</span>
                     </>
                   )}
-                  {item.usage.billing === "codex-subscription" && (
+                  {provider === "codex-cli" && (
                     <>
                       <span className="summary-view__badge summary-view__badge--accent">Codex CLI</span>
                       <span className="summary-view__badge summary-view__badge--muted">Codexサブスク枠</span>
                     </>
                   )}
-                  {item.usage.billing === "api" && (
+                  {provider === "gemini" && (
                     <span className="summary-view__badge summary-view__badge--warning">Gemini</span>
                   )}
                 </div>

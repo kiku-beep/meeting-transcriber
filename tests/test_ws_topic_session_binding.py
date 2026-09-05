@@ -99,3 +99,19 @@ def test_ws_drains_default_session_for_default_client_id(monkeypatch):
 
     assert drained
     assert list(session_mod._sessions) == ["default"]
+
+
+def test_rest_and_ws_share_the_same_named_session(monkeypatch):
+    from backend.api.routes_session import get_client_session
+
+    reset_registry(monkeypatch)
+    client_id = "shared-client"
+    rest_session = get_client_session(client_id)
+    rest_session.status = SessionStatus.RUNNING
+    rest_session.topic_queue.put_nowait(sample_tree())
+
+    with TestClient(make_app()).websocket_connect(f"/ws/transcript?client_id={client_id}"):
+        drained = wait_until_drained(rest_session.topic_queue)
+
+    assert drained
+    assert session_mod.get_session(client_id) is rest_session

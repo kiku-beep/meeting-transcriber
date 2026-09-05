@@ -229,13 +229,9 @@ async def _communicate_with_timeout(
         raise RuntimeError(f"{provider_label}がタイムアウトしました。")
 
 
-async def generate_summary_with_claude_code(entries: list[dict]) -> dict:
-    """Generate a meeting summary through the local Claude Code CLI."""
-    claude_code_command = _ensure_claude_code_subscription_mode()
-    prompt, transcript_text, tier = _build_summary_prompt(entries)
-
+def _build_claude_code_command(command: str) -> list[str]:
     cmd = [
-        claude_code_command,
+        command,
         "-p",
         "--input-format",
         "text",
@@ -250,14 +246,18 @@ async def generate_summary_with_claude_code(entries: list[dict]) -> dict:
     ]
     if settings.claude_code_model:
         cmd.extend(["--model", settings.claude_code_model])
+    return cmd
 
-    logger.info(
-        "Generating summary with Claude Code CLI (%d entries, %d chars, tier=%s)",
-        len(entries), len(transcript_text), tier,
-    )
 
+async def _run_claude_code_prompt(
+    prompt: str,
+    *,
+    command: str,
+    response_label: str,
+    include_exit_code: bool,
+) -> str:
     process = await asyncio.create_subprocess_exec(
-        *cmd,
+        *_build_claude_code_command(command),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -268,25 +268,42 @@ async def generate_summary_with_claude_code(entries: list[dict]) -> dict:
         provider_label="Claude Code",
         timeout_s=settings.claude_code_timeout_s,
     )
-
-    stdout_text = stdout.decode("utf-8", errors="replace").strip()
-    stderr_text = stderr.decode("utf-8", errors="replace").strip()
-
+    content = stdout.decode("utf-8", errors="replace").strip()
+    error = stderr.decode("utf-8", errors="replace").strip()
     if process.returncode != 0:
-        detail = stderr_text or stdout_text or f"exit code {process.returncode}"
-        raise RuntimeError(f"Claude Code CLI呼び出しに失敗しました: {detail}")
+        fallback = f"exit code {process.returncode}" if include_exit_code else process.returncode
+        raise RuntimeError(f"Claude Code CLI呼び出しに失敗しました: {error or content or fallback}")
+    if not content:
+        raise RuntimeError(
+            f"Claude Code CLIから{response_label}を取得できませんでした: "
+            f"{error or '出力が空でした'}"
+        )
+    return content
 
-    if not stdout_text:
-        detail = stderr_text or "出力が空でした"
-        raise RuntimeError(f"Claude Code CLIから要約を取得できませんでした: {detail}")
 
-    title = extract_title(stdout_text)
+async def generate_summary_with_claude_code(entries: list[dict]) -> dict:
+    """Generate a meeting summary through the local Claude Code CLI."""
+    claude_code_command = _ensure_claude_code_subscription_mode()
+    prompt, transcript_text, tier = _build_summary_prompt(entries)
+
+    logger.info(
+        "Generating summary with Claude Code CLI (%d entries, %d chars, tier=%s)",
+        len(entries), len(transcript_text), tier,
+    )
+
+    summary = await _run_claude_code_prompt(
+        prompt,
+        command=claude_code_command,
+        response_label="要約",
+        include_exit_code=True,
+    )
+    title = extract_title(summary)
     usage = {
         "model": "claude-code",
         "billing": SUMMARY_ENGINES["claude-code"]["billing"],
     }
-    logger.info("Summary generated with Claude Code: %d chars, title=%s", len(stdout_text), title)
-    return {"summary": stdout_text, "title": title, "usage": usage}
+    logger.info("Summary generated with Claude Code: %d chars, title=%s", len(summary), title)
+    return {"summary": summary, "title": title, "usage": usage}
 
 # Gemini model catalog: pricing (per 1M tokens), speed, accuracy
 GEMINI_MODELS: dict[str, dict] = {
@@ -383,6 +400,94 @@ def reset_codex_login_cache() -> None:
     _codex_login_verified_timeout_s = None
 
 
+def _ensure_gemini_api_key() -> None:
+    if not settings.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY が設定されていません。.env ファイルを確認してください。")
+
+
+def _is_retryable_gemini_error(error: Exception) -> bool:
+    detail = str(error)
+    return (
+        "500" in detail
+        or "503" in detail
+        or "UNAVAILABLE" in detail
+        or "overloaded" in detail.lower()
+        or "InternalServerError" in detail
+    )
+
+
+async def _generate_gemini_response(
+    prompt: str,
+    *,
+    max_attempts: int,
+):
+    client = get_gemini_client()
+    for attempt in range(max_attempts):
+        try:
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=settings.gemini_model,
+                contents=prompt,
+            )
+            if attempt > 0:
+                logger.info("Gemini API succeeded after %d retries", attempt)
+            return response
+        except Exception as error:
+            if _is_retryable_gemini_error(error) and attempt < max_attempts - 1:
+                wait = 2 ** attempt
+                logger.warning(
+                    "Gemini API error (attempt %d/%d): %s, retrying in %ds...",
+                    attempt + 1,
+                    max_attempts,
+                    str(error)[:100],
+                    wait,
+                )
+                await asyncio.sleep(wait)
+                continue
+            logger.error(
+                "Gemini API error (attempt %d/%d): %s",
+                attempt + 1,
+                max_attempts,
+                error,
+            )
+            raise
+    raise RuntimeError("Gemini API呼び出しに失敗しました")
+
+
+def _gemini_usage_counts(response) -> tuple[int, int, int] | None:
+    metadata = getattr(response, "usage_metadata", None)
+    if not metadata:
+        return None
+    input_tokens = getattr(metadata, "prompt_token_count", 0) or 0
+    output_tokens = getattr(metadata, "candidates_token_count", 0) or 0
+    total_tokens = getattr(metadata, "total_token_count", 0) or (
+        input_tokens + output_tokens
+    )
+    return input_tokens, output_tokens, total_tokens
+
+
+def _summary_gemini_usage(response) -> dict:
+    counts = _gemini_usage_counts(response)
+    if counts is None:
+        return {}
+
+    input_tokens, output_tokens, total_tokens = counts
+    pricing = PRICING.get(
+        settings.gemini_model,
+        PRICING.get("gemini-2.0-flash", {}),
+    )
+    input_cost = input_tokens / 1_000_000 * pricing.get("input", 0)
+    output_cost = output_tokens / 1_000_000 * pricing.get("output", 0)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "model": settings.gemini_model,
+        "billing": "api",
+        "cost_usd": round(input_cost + output_cost, 6),
+    }
+
+
 async def generate_summary(entries: list[dict]) -> dict:
     """Generate a meeting summary from transcript entries using the configured engine."""
     engine = settings.summary_engine
@@ -471,41 +576,12 @@ async def generate_text_with_summary_engine(prompt: str) -> dict:
 
 async def _generate_text_with_claude_code(prompt: str) -> dict:
     claude_code_command = _ensure_claude_code_subscription_mode()
-    cmd = [
-        claude_code_command,
-        "-p",
-        "--input-format",
-        "text",
-        "--output-format",
-        "text",
-        "--permission-mode",
-        "dontAsk",
-        "--tools",
-        "",
-        "--safe-mode",
-        "--no-session-persistence",
-    ]
-    if settings.claude_code_model:
-        cmd.extend(["--model", settings.claude_code_model])
-
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await _communicate_with_timeout(
-        process,
+    content = await _run_claude_code_prompt(
         prompt,
-        provider_label="Claude Code",
-        timeout_s=settings.claude_code_timeout_s,
+        command=claude_code_command,
+        response_label="回答",
+        include_exit_code=False,
     )
-    content = stdout.decode("utf-8", errors="replace").strip()
-    error = stderr.decode("utf-8", errors="replace").strip()
-    if process.returncode != 0:
-        raise RuntimeError(f"Claude Code CLI呼び出しに失敗しました: {error or content or process.returncode}")
-    if not content:
-        raise RuntimeError(f"Claude Code CLIから回答を取得できませんでした: {error or '出力が空でした'}")
     return {
         "content": content,
         "usage": {"model": "claude-code", "billing": "claude-subscription"},
@@ -663,20 +739,14 @@ async def _generate_text_with_codex_cli(
 
 
 async def _generate_text_with_gemini(prompt: str) -> dict:
-    if not settings.gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY が設定されていません。.env ファイルを確認してください。")
-    client = get_gemini_client()
-    response = await asyncio.to_thread(
-        client.models.generate_content,
-        model=settings.gemini_model,
-        contents=prompt,
-    )
-    content = response.text
+    _ensure_gemini_api_key()
+    response = await _generate_gemini_response(prompt, max_attempts=1)
     usage = {"model": settings.gemini_model, "billing": "api"}
-    if hasattr(response, "usage_metadata") and response.usage_metadata:
-        meta = response.usage_metadata
-        usage["total_tokens"] = getattr(meta, "total_token_count", 0) or 0
-    return {"content": content, "usage": usage}
+    if getattr(response, "usage_metadata", None):
+        usage["total_tokens"] = (
+            getattr(response.usage_metadata, "total_token_count", 0) or 0
+        )
+    return {"content": response.text, "usage": usage}
 
 
 async def generate_summary_auto(entries: list[dict]) -> dict:
@@ -704,77 +774,18 @@ async def generate_summary_with_gemini(entries: list[dict]) -> dict:
         RuntimeError: If GEMINI_API_KEY is not configured.
         Exception: On API errors.
     """
-    if not settings.gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY が設定されていません。.env ファイルを確認してください。")
+    _ensure_gemini_api_key()
 
     prompt, transcript_text, tier = _build_summary_prompt(entries)
 
     logger.info("Generating summary with Gemini (%d entries, %d chars, tier=%s)",
                 len(entries), len(transcript_text), tier)
 
-    client = get_gemini_client()
-
-    # Retry on transient errors (500, 503, etc.)
-    max_retries = 3
-    response = None
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=settings.gemini_model,
-                contents=prompt,
-            )
-            if attempt > 0:
-                logger.info("Gemini API succeeded after %d retries", attempt)
-            break
-        except Exception as e:
-            last_error = e
-            err_str = str(e)
-            # Retry on 500, 503, UNAVAILABLE, or overloaded
-            is_retryable = (
-                "500" in err_str or
-                "503" in err_str or
-                "UNAVAILABLE" in err_str or
-                "overloaded" in err_str.lower() or
-                "InternalServerError" in err_str
-            )
-            if is_retryable and attempt < max_retries - 1:
-                wait = 2 ** attempt
-                logger.warning("Gemini API error (attempt %d/%d): %s, retrying in %ds...",
-                               attempt + 1, max_retries, err_str[:100], wait)
-                await asyncio.sleep(wait)
-            else:
-                logger.error("Gemini API error (attempt %d/%d): %s", attempt + 1, max_retries, err_str)
-                raise
-
+    response = await _generate_gemini_response(prompt, max_attempts=3)
     if response is None:
         raise RuntimeError("Gemini API呼び出しに失敗しました")
-
     summary = response.text
-
-    # Extract token usage
-    usage = {}
-    if hasattr(response, "usage_metadata") and response.usage_metadata:
-        meta = response.usage_metadata
-        input_tokens = getattr(meta, "prompt_token_count", 0) or 0
-        output_tokens = getattr(meta, "candidates_token_count", 0) or 0
-        total_tokens = getattr(meta, "total_token_count", 0) or (input_tokens + output_tokens)
-
-        # Calculate cost
-        model = settings.gemini_model
-        pricing = PRICING.get(model, PRICING.get("gemini-2.0-flash", {}))
-        input_cost = input_tokens / 1_000_000 * pricing.get("input", 0)
-        output_cost = output_tokens / 1_000_000 * pricing.get("output", 0)
-        total_cost = input_cost + output_cost
-
-        usage = {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": total_tokens,
-            "model": model,
-            "billing": "api",
-            "cost_usd": round(total_cost, 6),
-        }
+    usage = _summary_gemini_usage(response)
 
     title = extract_title(summary)
 

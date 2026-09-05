@@ -1167,6 +1167,13 @@ def get_or_create_session(client_id: str) -> TranscriptionSession:
     return _sessions[client_id]
 
 
+def resolve_client_session(prepared_client_id: str) -> TranscriptionSession:
+    """Resolve a prepared client ID to the default or a named session."""
+    if prepared_client_id == "default":
+        return get_session()
+    return get_or_create_session(prepared_client_id)
+
+
 def active_session_count() -> int:
     """Count sessions that are actively using recording/transcription capacity."""
     active_statuses = {

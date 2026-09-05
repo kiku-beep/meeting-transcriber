@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from backend.core.topic_tracker import REFRESH_UPDATED
 from backend.core.topic_tree import tree_to_dict
 from backend.models.schemas import SessionStatus
-from backend.models.session import get_or_create_session, get_session
+from backend.models.session import resolve_client_session
 from backend.storage.file_store import load_topics
 
 router = APIRouter(prefix="/api/topics", tags=["topics"])
@@ -21,9 +21,7 @@ class TopicRefreshRequest(BaseModel):
 
 def _get_client_session(client_id: str):
     normalized = client_id.strip() or "default"
-    if normalized == "default":
-        return get_session()
-    return get_or_create_session(normalized)
+    return resolve_client_session(normalized)
 
 
 def _empty_tree() -> dict:

@@ -149,6 +149,143 @@ def test_auto_summary_records_two_failures_before_gemini(monkeypatch):
     assert result["usage"]["fallback_reason"] == "provider-error"
 
 
+def test_generic_gemini_uses_one_attempt_and_reports_optional_total_usage(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key", raising=False)
+    monkeypatch.setattr(settings, "gemini_model", "gemini-2.0-flash", raising=False)
+    calls = 0
+
+    class UsageMetadata:
+        total_token_count = 13
+
+    class Response:
+        text = "Gemini回答"
+        usage_metadata = UsageMetadata()
+
+    class Models:
+        def generate_content(self, **kwargs):
+            nonlocal calls
+            calls += 1
+            return Response()
+
+    class Client:
+        models = Models()
+
+    monkeypatch.setattr(summarizer, "get_gemini_client", lambda: Client())
+
+    result = asyncio.run(summarizer._generate_text_with_gemini("質問"))
+
+    assert calls == 1
+    assert result == {
+        "content": "Gemini回答",
+        "usage": {
+            "model": "gemini-2.0-flash",
+            "billing": "api",
+            "total_tokens": 13,
+        },
+    }
+
+
+def test_gemini_usage_keeps_generic_total_and_sums_direct_summary_tokens(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key", raising=False)
+    monkeypatch.setattr(settings, "gemini_model", "gemini-2.0-flash", raising=False)
+
+    class UsageMetadata:
+        prompt_token_count = 10
+        candidates_token_count = 20
+        total_token_count = None
+
+    class Response:
+        text = "## タイトル\nGemini議事録"
+        usage_metadata = UsageMetadata()
+
+    class Models:
+        def generate_content(self, **kwargs):
+            return Response()
+
+    class Client:
+        models = Models()
+
+    monkeypatch.setattr(summarizer, "get_gemini_client", lambda: Client())
+
+    generic = asyncio.run(summarizer._generate_text_with_gemini("質問"))
+    direct = asyncio.run(summarizer.generate_summary_with_gemini([{"text": "要約対象"}]))
+
+    assert generic["usage"] == {
+        "model": "gemini-2.0-flash",
+        "billing": "api",
+        "total_tokens": 0,
+    }
+    assert direct["usage"]["input_tokens"] == 10
+    assert direct["usage"]["output_tokens"] == 20
+    assert direct["usage"]["total_tokens"] == 30
+
+
+def test_direct_gemini_summary_raises_contract_error_for_empty_response(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key", raising=False)
+
+    class Models:
+        def generate_content(self, **kwargs):
+            return None
+
+    class Client:
+        models = Models()
+
+    monkeypatch.setattr(summarizer, "get_gemini_client", lambda: Client())
+
+    with pytest.raises(RuntimeError, match="Gemini API呼び出しに失敗しました"):
+        asyncio.run(summarizer.generate_summary_with_gemini([{"text": "要約対象"}]))
+
+
+def test_direct_gemini_summary_retries_and_reports_detailed_usage(monkeypatch):
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key", raising=False)
+    monkeypatch.setattr(settings, "gemini_model", "gemini-2.0-flash", raising=False)
+    calls = 0
+    waits = []
+
+    class UsageMetadata:
+        prompt_token_count = 5
+        candidates_token_count = 7
+        total_token_count = 12
+
+    class Response:
+        text = "## タイトル\nGemini議事録"
+        usage_metadata = UsageMetadata()
+
+    class Models:
+        def generate_content(self, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise RuntimeError("503 temporarily unavailable")
+            return Response()
+
+    class Client:
+        models = Models()
+
+    async def fake_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(summarizer, "get_gemini_client", lambda: Client())
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    result = asyncio.run(summarizer.generate_summary_with_gemini([{"text": "要約対象"}]))
+
+    assert calls == 3
+    assert waits == [1, 2]
+    assert result == {
+        "summary": "## タイトル\nGemini議事録",
+        "title": "Gemini議事録",
+        "usage": {
+            "input_tokens": 5,
+            "output_tokens": 7,
+            "total_tokens": 12,
+            "model": "gemini-2.0-flash",
+            "billing": "api",
+            "cost_usd": 3e-06,
+        },
+    }
+
+
 def test_codex_cli_blocks_api_credentials_before_launch(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     launched = False
